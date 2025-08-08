@@ -202,11 +202,33 @@ class XHouseController(hass.Hass):
                     model = device.get("model", "Unknown")
                     device_type = device.get("deviceType", "Unknown")
                     
-                    # Determine if this is likely a gate/garage based on name or model
-                    is_gate = any(keyword in alias.lower() for keyword in ["gate", "garage", "door"]) or model == "XH-SG"
+                    # Store the original alias before any overrides
+                    original_alias = alias
+                    
+                    # Determine device type and device class
+                    is_gate = False
+                    is_garage = False
+                    device_class = "switch"
+                    
+                    # XH-SGC01 models are gates (not garage door openers)
+                    if "XH-SGC01" in model:
+                        is_gate = True
+                        device_class = "gate"
+                        # Override the name for XH-SGC01 models
+                        alias = "Gate Opener"
+                    # Check for other gate keywords
+                    elif any(keyword in alias.lower() for keyword in ["gate"]) or "gate" in model.lower():
+                        is_gate = True
+                        device_class = "gate"
+                    # Check for garage door keywords
+                    elif any(keyword in alias.lower() for keyword in ["garage", "door"]) or "garage" in model.lower():
+                        is_garage = True
+                        device_class = "garage"
+                    
+                    is_cover = is_gate or is_garage
                     
                     # Create entity ID based on device type (cover for gates/garage doors, switch for others)
-                    if is_gate:
+                    if is_cover:
                         entity_id = f"cover.xhouse_{device_id_str}"
                     else:
                         entity_id = f"switch.xhouse_{device_id_str}"
@@ -215,12 +237,14 @@ class XHouseController(hass.Hass):
                     self.devices[entity_id] = {
                         "id": device_id,
                         "name": alias,
+                        "original_name": original_alias,  # Store original for reference
                         "model": model,
                         "type": device_type,
-                        "is_gate": is_gate
+                        "device_class": device_class,
+                        "is_cover": is_cover
                     }
                     
-                    self.debug(f"Mapped entity {entity_id} to device {device_id}")
+                    self.debug(f"Mapped entity {entity_id} to device {device_id} with class {device_class}")
                     
                     # Try to get switch status from properties
                     is_on = False
@@ -230,20 +254,19 @@ class XHouseController(hass.Hass):
                             break
                     
                     # Create/update entity in Home Assistant
-                    if is_gate:
+                    if is_cover:
                         # For gates/garage doors, use cover entity with open/closed states
                         self.set_state(entity_id, 
                                      state="open" if is_on else "closed",
                                      attributes={
                                          "friendly_name": alias,
-                                         "device_class": "garage",
+                                         "device_class": device_class,
                                          "device_id": device_id_str,
                                          "model": model,
                                          "device_type": device_type,
                                          "supported_features": 3,  # SUPPORT_OPEN + SUPPORT_CLOSE
-                                         "icon": "mdi:gate"
                                      })
-                        self.log(f"Created/updated cover entity {entity_id} for {alias}")
+                        self.log(f"Created/updated cover entity {entity_id} as {device_class} for {alias}")
                     else:
                         # For regular devices, use switch entity with on/off states
                         self.set_state(entity_id, 
@@ -343,7 +366,7 @@ class XHouseController(hass.Hass):
                 
                 # Update entity in Home Assistant if entity_id is provided
                 if entity_id:
-                    # Check if this is a cover (gate/garage) or regular switch
+                    # Check if this is a cover or regular switch
                     is_cover = entity_id.startswith("cover.")
                     
                     if is_cover:
