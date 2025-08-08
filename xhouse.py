@@ -36,7 +36,7 @@ class XHouseController(hass.Hass):
         # Schedule first login and device discovery
         self.run_in(self.login_and_discover, 10)  # Run 10 seconds after startup
         
-        # Listen to specific events for device state changes
+        # Listen to switch events
         self.listen_event(self.switch_event_handler, "call_service", 
                          domain="switch", 
                          service="turn_on")
@@ -45,6 +45,17 @@ class XHouseController(hass.Hass):
                          service="turn_off")
         self.listen_event(self.switch_event_handler, "call_service", 
                          domain="switch", 
+                         service="toggle")
+        
+        # Listen to cover events
+        self.listen_event(self.cover_event_handler, "call_service", 
+                         domain="cover", 
+                         service="open_cover")
+        self.listen_event(self.cover_event_handler, "call_service", 
+                         domain="cover", 
+                         service="close_cover")
+        self.listen_event(self.cover_event_handler, "call_service", 
+                         domain="cover", 
                          service="toggle")
         
         self.log("XHouse Controller initialized with event listeners")
@@ -191,11 +202,14 @@ class XHouseController(hass.Hass):
                     model = device.get("model", "Unknown")
                     device_type = device.get("deviceType", "Unknown")
                     
-                    # Create a friendly entity ID - use the string version without dots/commas
-                    entity_id = f"switch.xhouse_{device_id_str}"
-                    
                     # Determine if this is likely a gate/garage based on name or model
                     is_gate = any(keyword in alias.lower() for keyword in ["gate", "garage", "door"]) or model == "XH-SG"
+                    
+                    # Create entity ID based on device type (cover for gates/garage doors, switch for others)
+                    if is_gate:
+                        entity_id = f"cover.xhouse_{device_id_str}"
+                    else:
+                        entity_id = f"switch.xhouse_{device_id_str}"
                     
                     # Store device info
                     self.devices[entity_id] = {
@@ -216,18 +230,33 @@ class XHouseController(hass.Hass):
                             break
                     
                     # Create/update entity in Home Assistant
-                    self.set_state(entity_id, 
-                                 state="on" if is_on else "off",
-                                 attributes={
-                                     "friendly_name": alias,
-                                     "device_class": "switch",
-                                     "device_id": device_id_str,
-                                     "model": model,
-                                     "device_type": device_type,
-                                     "icon": "mdi:gate" if is_gate else "mdi:power-socket"
-                                 })
-                    
-                    self.log(f"Created/updated entity {entity_id} for device {alias}")
+                    if is_gate:
+                        # For gates/garage doors, use cover entity with open/closed states
+                        self.set_state(entity_id, 
+                                     state="open" if is_on else "closed",
+                                     attributes={
+                                         "friendly_name": alias,
+                                         "device_class": "garage",
+                                         "device_id": device_id_str,
+                                         "model": model,
+                                         "device_type": device_type,
+                                         "supported_features": 3,  # SUPPORT_OPEN + SUPPORT_CLOSE
+                                         "icon": "mdi:gate"
+                                     })
+                        self.log(f"Created/updated cover entity {entity_id} for {alias}")
+                    else:
+                        # For regular devices, use switch entity with on/off states
+                        self.set_state(entity_id, 
+                                     state="on" if is_on else "off",
+                                     attributes={
+                                         "friendly_name": alias,
+                                         "device_class": "switch",
+                                         "device_id": device_id_str,
+                                         "model": model,
+                                         "device_type": device_type,
+                                         "icon": "mdi:power-socket"
+                                     })
+                        self.log(f"Created/updated switch entity {entity_id} for {alias}")
                 
                 return True
             else:
@@ -312,10 +341,19 @@ class XHouseController(hass.Hass):
                         is_on = prop.get("value") == "1"
                         break
                 
-                # Update entity in Home Assistant
+                # Update entity in Home Assistant if entity_id is provided
                 if entity_id:
-                    self.set_state(entity_id, state="on" if is_on else "off")
-                    self.debug(f"Updated {entity_id} state to {'on' if is_on else 'off'}")
+                    # Check if this is a cover (gate/garage) or regular switch
+                    is_cover = entity_id.startswith("cover.")
+                    
+                    if is_cover:
+                        # For covers, use open/closed states
+                        self.set_state(entity_id, state="open" if is_on else "closed")
+                        self.debug(f"Updated {entity_id} state to {'open' if is_on else 'closed'}")
+                    else:
+                        # For switches, use on/off states
+                        self.set_state(entity_id, state="on" if is_on else "off")
+                        self.debug(f"Updated {entity_id} state to {'on' if is_on else 'off'}")
                 
                 return is_on
             else:
@@ -333,8 +371,8 @@ class XHouseController(hass.Hass):
             self.log(f"An error occurred getting device state: {e}", level="ERROR")
             return None
     
-    def control_switch(self, entity_id, turn_on=True):
-        """Control a smart switch (turn on or off)"""
+    def control_device(self, entity_id, turn_on=True):
+        """Control a device (turn on/off or open/close)"""
         if not self.token_valid:
             self.log("Not logged in. Cannot control device.", level="WARNING")
             if not self.login():
@@ -347,8 +385,14 @@ class XHouseController(hass.Hass):
             
         device_info = self.devices[entity_id]
         device_id = device_info["id"]  # Use the numeric ID
+        is_cover = entity_id.startswith("cover.")
             
-        state = "On" if turn_on else "Off"
+        # Set action text based on device type
+        if is_cover:
+            state = "Open" if turn_on else "Close"
+        else:
+            state = "On" if turn_on else "Off"
+            
         self.log(f"Sending '{state}' command to device {device_id} ({device_info['name']})")
         
         signature, timestamp = self.generate_signature()
@@ -375,7 +419,7 @@ class XHouseController(hass.Hass):
             "deviceId": int(device_id), 
             "userId": int(self.user_id),
             "propertyValue": {"Switch_1": 1 if turn_on else 0},
-            "action": state
+            "action": "On" if turn_on else "Off"  # API always uses On/Off
         }
         
         self.debug(f"Control request body: {json.dumps(body_dict)}")
@@ -394,7 +438,12 @@ class XHouseController(hass.Hass):
                 self.log(f"Successfully sent {state.lower()} command to device {device_id}")
                 
                 # Update entity in Home Assistant immediately (optimistic update)
-                self.set_state(entity_id, state="on" if turn_on else "off")
+                if is_cover:
+                    # For covers, use open/closed states
+                    self.set_state(entity_id, state="open" if turn_on else "closed")
+                else:
+                    # For switches, use on/off states
+                    self.set_state(entity_id, state="on" if turn_on else "off")
                 
                 return True
             else:
@@ -403,7 +452,7 @@ class XHouseController(hass.Hass):
                     self.log("Token invalidated, attempting to re-login", level="WARNING")
                     if self.login():
                         # Try again after successful login
-                        return self.control_switch(entity_id, turn_on)
+                        return self.control_device(entity_id, turn_on)
                 else:
                     self.log(f"Failed to control device: {data.get('msg')}", level="ERROR")
                 return False
@@ -414,7 +463,7 @@ class XHouseController(hass.Hass):
     
     # Switch event handler
     def switch_event_handler(self, event_name, data, kwargs):
-        """Handle all switch events"""
+        """Handle switch events"""
         service = data.get("service")
         entity_id = data.get("service_data", {}).get("entity_id")
         
@@ -432,9 +481,36 @@ class XHouseController(hass.Hass):
             self.debug(f"Switch event: {service} for {entity}")
             
             if service == "turn_on":
-                self.control_switch(entity, turn_on=True)
+                self.control_device(entity, turn_on=True)
             elif service == "turn_off":
-                self.control_switch(entity, turn_on=False)
+                self.control_device(entity, turn_on=False)
             elif service == "toggle":
                 current_state = self.get_state(entity)
-                self.control_switch(entity, turn_on=(current_state != "on"))
+                self.control_device(entity, turn_on=(current_state != "on"))
+    
+    # Cover event handler
+    def cover_event_handler(self, event_name, data, kwargs):
+        """Handle cover events"""
+        service = data.get("service")
+        entity_id = data.get("service_data", {}).get("entity_id")
+        
+        if not entity_id:
+            return
+        
+        # Handle both single entity and lists
+        entities = entity_id if isinstance(entity_id, list) else [entity_id]
+        
+        for entity in entities:
+            # Check if this is one of our covers
+            if not entity.startswith("cover.xhouse_"):
+                continue
+                
+            self.debug(f"Cover event: {service} for {entity}")
+            
+            if service == "open_cover":
+                self.control_device(entity, turn_on=True)
+            elif service == "close_cover":
+                self.control_device(entity, turn_on=False)
+            elif service == "toggle":
+                current_state = self.get_state(entity)
+                self.control_device(entity, turn_on=(current_state != "open"))
