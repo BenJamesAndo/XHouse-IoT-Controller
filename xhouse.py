@@ -202,6 +202,11 @@ class XHouseController(hass.Hass):
                     model = device.get("model", "Unknown")
                     device_type = device.get("deviceType", "Unknown")
                     
+                    # Get device connection state (1 = online, 0 = offline)
+                    connection_status = device.get("status", 0)
+                    connection_state = "online" if connection_status == 1 else "offline"
+                    is_available = connection_status == 1
+                    
                     # Store the original alias before any overrides
                     original_alias = alias
                     
@@ -233,6 +238,26 @@ class XHouseController(hass.Hass):
                     else:
                         entity_id = f"switch.xhouse_{device_id_str}"
                     
+                    # Try to get switch status from properties
+                    is_on = False
+                    for prop in device.get("properties", []):
+                        if prop.get("key") == "Switch_1":
+                            is_on = prop.get("value") == "1"
+                            break
+                    
+                    # Determine entity state based on device type and availability
+                    if not is_available:
+                        entity_state = "unavailable"
+                    elif is_cover:
+                        entity_state = "open" if is_on else "closed"
+                    else:
+                        entity_state = "on" if is_on else "off"
+                    
+                    # Store the last known good state for when device comes back online
+                    last_good_state = entity_state if entity_state != "unavailable" else (
+                        "open" if is_on else "closed" if is_cover else "on" if is_on else "off"
+                    )
+                    
                     # Store device info
                     self.devices[entity_id] = {
                         "id": device_id,
@@ -241,45 +266,40 @@ class XHouseController(hass.Hass):
                         "model": model,
                         "type": device_type,
                         "device_class": device_class,
-                        "is_cover": is_cover
+                        "is_cover": is_cover,
+                        "connection_state": connection_state,
+                        "last_good_state": last_good_state
                     }
                     
                     self.debug(f"Mapped entity {entity_id} to device {device_id} with class {device_class}")
                     
-                    # Try to get switch status from properties
-                    is_on = False
-                    for prop in device.get("properties", []):
-                        if prop.get("key") == "Switch_1":
-                            is_on = prop.get("value") == "1"
-                            break
-                    
                     # Create/update entity in Home Assistant
                     if is_cover:
-                        # For gates/garage doors, use cover entity with open/closed states
-                        self.set_state(entity_id, 
-                                     state="open" if is_on else "closed",
-                                     attributes={
-                                         "friendly_name": alias,
-                                         "device_class": device_class,
-                                         "device_id": device_id_str,
-                                         "model": model,
-                                         "device_type": device_type,
-                                         "supported_features": 3,  # SUPPORT_OPEN + SUPPORT_CLOSE
-                                     })
-                        self.log(f"Created/updated cover entity {entity_id} as {device_class} for {alias}")
+                        # For gates/garage doors
+                        attributes = {
+                            "friendly_name": alias,
+                            "device_class": device_class,
+                            "device_id": device_id_str,
+                            "model": model,
+                            "device_type": device_type,
+                            "supported_features": 3,  # SUPPORT_OPEN + SUPPORT_CLOSE
+                            "connection_state": connection_state
+                        }
+                        self.set_state(entity_id, state=entity_state, attributes=attributes)
+                        self.log(f"Created/updated cover entity {entity_id} as {device_class} for {alias} ({connection_state})")
                     else:
-                        # For regular devices, use switch entity with on/off states
-                        self.set_state(entity_id, 
-                                     state="on" if is_on else "off",
-                                     attributes={
-                                         "friendly_name": alias,
-                                         "device_class": "switch",
-                                         "device_id": device_id_str,
-                                         "model": model,
-                                         "device_type": device_type,
-                                         "icon": "mdi:power-socket"
-                                     })
-                        self.log(f"Created/updated switch entity {entity_id} for {alias}")
+                        # For regular devices
+                        attributes = {
+                            "friendly_name": alias,
+                            "device_class": "switch",
+                            "device_id": device_id_str,
+                            "model": model,
+                            "device_type": device_type,
+                            "icon": "mdi:power-socket",
+                            "connection_state": connection_state
+                        }
+                        self.set_state(entity_id, state=entity_state, attributes=attributes)
+                        self.log(f"Created/updated switch entity {entity_id} for {alias} ({connection_state})")
                 
                 return True
             else:
@@ -307,11 +327,127 @@ class XHouseController(hass.Hass):
             self.log("Session expired, logging in again...")
             if not self.login():
                 return
+                
+        # First, update the device connection states from the group API
+        self.update_device_connection_states()
         
-        # Update each device state
+        # Then update each device state
         for entity_id, device_info in self.devices.items():
             device_id = device_info["id"]
-            self.get_device_state(device_id, entity_id)
+            # Only get device state for online devices
+            if device_info["connection_state"] == "online":
+                self.get_device_state(device_id, entity_id)
+    
+    def update_device_connection_states(self):
+        """Update the connection state of all devices (online/offline)"""
+        if not self.token_valid:
+            self.log("Not logged in. Cannot update device connection states.", level="WARNING")
+            if not self.login():
+                return False
+                
+        signature, timestamp = self.generate_signature()
+        api_url = f"{self.API_BASE_URL}/group/queryGroupDevices"
+        phonetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        headers = {
+            "apptype": self.APP_TYPE.lower(), 
+            "l": "EN", 
+            "phonetime": phonetime,
+            "platformcode": self.PLATFORM_CODE, 
+            "saascode": self.SAAS_CODE, 
+            "timestamp": timestamp,
+            "token": self.token, 
+            "userid": self.user_id, 
+            "signature": signature,
+            "content-type": 'application/json; charset=utf-8', 
+            "user-agent": "okhttp/4.2.0",
+            "host": "47.52.111.184:9010", 
+            "connection": "Keep-Alive",
+        }
+        
+        body_dict = {
+            "userId": int(self.user_id),
+            "groupId": 0  # 0 appears to return all devices
+        }
+        
+        body_string = json.dumps(body_dict, separators=(',', ':'))
+        headers["content-length"] = str(len(body_string.encode('utf-8')))
+        
+        try:
+            response = self.session.post(api_url, headers=headers, data=body_string, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            
+            if data.get("code") == "0":
+                devices = data.get("result", {}).get("deviceInfos", [])
+                
+                # Update connection state for each device
+                for device in devices:
+                    device_id = device.get("id")
+                    device_id_str = str(device_id)
+                    
+                    # Get device connection state (1 = online, 0 = offline)
+                    connection_status = device.get("status", 0)
+                    connection_state = "online" if connection_status == 1 else "offline"
+                    
+                    # Find the entity for this device and update its connection state
+                    for entity_id, device_info in self.devices.items():
+                        if str(device_info["id"]) == device_id_str:
+                            # Get previous connection state to detect changes
+                            previous_state = device_info["connection_state"]
+                            
+                            # Update the stored connection state
+                            device_info["connection_state"] = connection_state
+                            
+                            # Update entity attributes
+                            current_attributes = self.get_state(entity_id, attribute="all").get("attributes", {})
+                            current_attributes["connection_state"] = connection_state
+                            
+                            # If the connection state changed, update the entity state
+                            if previous_state != connection_state:
+                                if connection_state == "offline":
+                                    # Device went offline - set to unavailable
+                                    self.log(f"Device {entity_id} is now offline, marking as unavailable")
+                                    self.set_state(entity_id, state="unavailable", attributes=current_attributes)
+                                else:
+                                    # Device came back online - restore last known good state
+                                    last_state = device_info.get("last_good_state")
+                                    if not last_state or last_state == "unavailable":
+                                        # Default if no last state is known
+                                        last_state = "closed" if device_info["is_cover"] else "off"
+                                    
+                                    self.log(f"Device {entity_id} is now online, restoring to {last_state}")
+                                    self.set_state(entity_id, state=last_state, attributes=current_attributes)
+                                    
+                                    # Fetch the current actual state from the device
+                                    self.get_device_state(device_id, entity_id)
+                            else:
+                                # No change in connection state, just update attributes
+                                self.debug(f"Updated {entity_id} connection state (unchanged: {connection_state})")
+                                
+                                # If device is offline, make sure it's marked unavailable
+                                if connection_state == "offline":
+                                    current_state = self.get_state(entity_id)
+                                    if current_state != "unavailable":
+                                        self.set_state(entity_id, state="unavailable", attributes=current_attributes)
+                            
+                            break
+                
+                return True
+            else:
+                if "token invalid" in data.get("msg", "").lower():
+                    self.token_valid = False
+                    self.log("Token invalidated, attempting to re-login", level="WARNING")
+                    if self.login():
+                        # Try again after successful login
+                        return self.update_device_connection_states()
+                else:
+                    self.log(f"Failed to get device connection states: {data.get('msg')}", level="WARNING")
+                return False
+                
+        except Exception as e:
+            self.log(f"An error occurred updating device connection states: {e}", level="ERROR")
+            return False
         
     def get_device_state(self, device_id, entity_id=None):
         """Get the current state of a device and update Home Assistant"""
@@ -366,17 +502,27 @@ class XHouseController(hass.Hass):
                 
                 # Update entity in Home Assistant if entity_id is provided
                 if entity_id:
+                    # Get current attributes
+                    current_attributes = self.get_state(entity_id, attribute="all").get("attributes", {})
+                    
                     # Check if this is a cover or regular switch
                     is_cover = entity_id.startswith("cover.")
                     
+                    # Update the state
                     if is_cover:
-                        # For covers, use open/closed states
-                        self.set_state(entity_id, state="open" if is_on else "closed")
-                        self.debug(f"Updated {entity_id} state to {'open' if is_on else 'closed'}")
+                        new_state = "open" if is_on else "closed"
+                        self.set_state(entity_id, state=new_state, attributes=current_attributes)
+                        self.debug(f"Updated {entity_id} state to {new_state}")
+                        
+                        # Store the last good state
+                        self.devices[entity_id]["last_good_state"] = new_state
                     else:
-                        # For switches, use on/off states
-                        self.set_state(entity_id, state="on" if is_on else "off")
-                        self.debug(f"Updated {entity_id} state to {'on' if is_on else 'off'}")
+                        new_state = "on" if is_on else "off"
+                        self.set_state(entity_id, state=new_state, attributes=current_attributes)
+                        self.debug(f"Updated {entity_id} state to {new_state}")
+                        
+                        # Store the last good state
+                        self.devices[entity_id]["last_good_state"] = new_state
                 
                 return is_on
             else:
@@ -386,6 +532,16 @@ class XHouseController(hass.Hass):
                     if self.login():
                         # Try again after successful login
                         return self.get_device_state(device_id, entity_id)
+                elif "device offline" in data.get("msg", "").lower() and entity_id:
+                    # If the device is reported as offline, mark it as unavailable
+                    self.devices[entity_id]["connection_state"] = "offline"
+                    
+                    # Update the entity attributes and state
+                    current_attributes = self.get_state(entity_id, attribute="all").get("attributes", {})
+                    current_attributes["connection_state"] = "offline"
+                    self.set_state(entity_id, state="unavailable", attributes=current_attributes)
+                    
+                    self.log(f"Device {entity_id} is offline, marked as unavailable")
                 else:
                     self.log(f"Failed to get device state: {data.get('msg')}", level="WARNING")
                 return None
@@ -409,6 +565,20 @@ class XHouseController(hass.Hass):
         device_info = self.devices[entity_id]
         device_id = device_info["id"]  # Use the numeric ID
         is_cover = entity_id.startswith("cover.")
+        
+        # Check if device is offline before attempting to control it
+        if device_info.get("connection_state") == "offline":
+            # Get current entity state - should be unavailable if offline
+            current_state = self.get_state(entity_id)
+            
+            # If not already marked unavailable, do it now
+            if current_state != "unavailable":
+                current_attributes = self.get_state(entity_id, attribute="all").get("attributes", {})
+                current_attributes["connection_state"] = "offline"
+                self.set_state(entity_id, state="unavailable", attributes=current_attributes)
+            
+            self.log(f"Cannot control device {entity_id} because it is offline", level="WARNING")
+            return False
             
         # Set action text based on device type
         if is_cover:
@@ -461,12 +631,27 @@ class XHouseController(hass.Hass):
                 self.log(f"Successfully sent {state.lower()} command to device {device_id}")
                 
                 # Update entity in Home Assistant immediately (optimistic update)
+                # Preserve existing attributes
+                current_attributes = self.get_state(entity_id, attribute="all").get("attributes", {})
+                
+                # Update the connection state to online since command succeeded
+                current_attributes["connection_state"] = "online"
+                self.devices[entity_id]["connection_state"] = "online"
+                
                 if is_cover:
                     # For covers, use open/closed states
-                    self.set_state(entity_id, state="open" if turn_on else "closed")
+                    new_state = "open" if turn_on else "closed"
+                    self.set_state(entity_id, state=new_state, attributes=current_attributes)
+                    
+                    # Store the last good state
+                    self.devices[entity_id]["last_good_state"] = new_state
                 else:
                     # For switches, use on/off states
-                    self.set_state(entity_id, state="on" if turn_on else "off")
+                    new_state = "on" if turn_on else "off"
+                    self.set_state(entity_id, state=new_state, attributes=current_attributes)
+                    
+                    # Store the last good state
+                    self.devices[entity_id]["last_good_state"] = new_state
                 
                 return True
             else:
@@ -476,9 +661,20 @@ class XHouseController(hass.Hass):
                     if self.login():
                         # Try again after successful login
                         return self.control_device(entity_id, turn_on)
+                elif "device offline" in data.get("msg", "").lower():
+                    # If device is reported as offline, mark it as unavailable
+                    self.devices[entity_id]["connection_state"] = "offline"
+                    
+                    # Update the entity attributes and state
+                    current_attributes = self.get_state(entity_id, attribute="all").get("attributes", {})
+                    current_attributes["connection_state"] = "offline"
+                    self.set_state(entity_id, state="unavailable", attributes=current_attributes)
+                    
+                    self.log(f"Cannot control device {entity_id} because it is offline", level="WARNING")
+                    return False
                 else:
                     self.log(f"Failed to control device: {data.get('msg')}", level="ERROR")
-                return False
+                    return False
                 
         except Exception as e:
             self.log(f"An error occurred controlling device: {e}", level="ERROR")
@@ -495,6 +691,7 @@ class XHouseController(hass.Hass):
         
         # Handle both single entity and lists
         entities = entity_id if isinstance(entity_id, list) else [entity_id]
+        processed = False
         
         for entity in entities:
             # Check if this is one of our switches
@@ -502,7 +699,13 @@ class XHouseController(hass.Hass):
                 continue
                 
             self.debug(f"Switch event: {service} for {entity}")
+            processed = True
             
+            # Check if entity is unavailable first
+            if self.get_state(entity) == "unavailable":
+                self.log(f"Cannot control {entity} because it is unavailable", level="WARNING")
+                continue
+                
             if service == "turn_on":
                 self.control_device(entity, turn_on=True)
             elif service == "turn_off":
@@ -522,6 +725,7 @@ class XHouseController(hass.Hass):
         
         # Handle both single entity and lists
         entities = entity_id if isinstance(entity_id, list) else [entity_id]
+        processed = False
         
         for entity in entities:
             # Check if this is one of our covers
@@ -529,7 +733,13 @@ class XHouseController(hass.Hass):
                 continue
                 
             self.debug(f"Cover event: {service} for {entity}")
+            processed = True
             
+            # Check if entity is unavailable first
+            if self.get_state(entity) == "unavailable":
+                self.log(f"Cannot control {entity} because it is unavailable", level="WARNING")
+                continue
+                
             if service == "open_cover":
                 self.control_device(entity, turn_on=True)
             elif service == "close_cover":
