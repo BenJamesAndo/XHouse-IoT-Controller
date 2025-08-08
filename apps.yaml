@@ -1,0 +1,7 @@
+xhouse:
+  module: xhouse
+  class: XHouseController
+  email: "youremail@gmail.com" 
+  password: "yourpassword"
+  refresh_interval: 300        # Normal refresh interval - every 5 minutes
+  debug_mode: false            # Set to true if you need detailed logs
