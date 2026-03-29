@@ -17,10 +17,13 @@ class XHouseController(hass.Hass):
     APP_TYPE = "android"
 
     # Known models get specialised entity handling (cover with open/close)
-    KNOWN_MODELS = ["XH-SGC01"]
+    KNOWN_MODELS = ["XH-SGC01", "EGA1800"]
 
     # Property keys that are config/metadata, not device controls
-    NON_CONTROL_PROPERTIES = {"VoiceControl", "bleCode", "wifiName"}
+    NON_CONTROL_PROPERTIES = {
+        "VoiceControl", "bleCode", "wifiName",
+        "status", "menuCode", "boardVersion", "updateStatusTime",
+    }
 
     # ── Initialisation ──────────────────────────────────────────────────
 
@@ -42,7 +45,7 @@ class XHouseController(hass.Hass):
 
         for domain, services in [
             ("switch", ["turn_on", "turn_off", "toggle"]),
-            ("cover", ["open_cover", "close_cover", "toggle"]),
+            ("cover", ["open_cover", "close_cover", "stop_cover", "toggle"]),
         ]:
             for service in services:
                 self.listen_event(
@@ -291,6 +294,8 @@ class XHouseController(hass.Hass):
         alias_lower, model_lower = alias.lower(), model.lower()
         if "XH-SGC01" in model:
             device_class, is_cover, alias = "gate", True, "Gate Opener"
+        elif "EGA" in model:
+            device_class, is_cover = "gate", True
         elif "gate" in alias_lower or "gate" in model_lower:
             device_class, is_cover = "gate", True
         elif any(k in alias_lower for k in ("garage", "door")) or "garage" in model_lower:
@@ -316,7 +321,8 @@ class XHouseController(hass.Hass):
             "connection_state": c["connection_state"],
         }
         if is_cover:
-            attrs["supported_features"] = 3  # OPEN + CLOSE
+            # OPEN=1 + CLOSE=2 = 3; add STOP=8 for EGA devices = 11
+            attrs["supported_features"] = 11 if "EGA" in model else 3
         else:
             attrs["icon"] = "mdi:power-socket"
 
@@ -327,6 +333,12 @@ class XHouseController(hass.Hass):
             connection_state=c["connection_state"], state=state, attributes=attrs,
         )
 
+        # EGA gate openers use action-based commands (keys 1-4)
+        if "EGA" in model:
+            self.devices[entity_id]["command_keys"] = {
+                "open": "1", "close": "2", "stop": "3", "pedestrian": "4",
+            }
+
     def _register_generic_device(self, device):
         """Register a switch entity for each INT property on an unknown device."""
         c = self._device_common(device)
@@ -334,7 +346,8 @@ class XHouseController(hass.Hass):
 
         int_props = [
             p for p in device.get("properties", [])
-            if p.get("type") == "INT" and p.get("key") not in self.NON_CONTROL_PROPERTIES
+            if (p.get("type") == "INT" or (p.get("key") or "").startswith("Switch_"))
+            and p.get("key") not in self.NON_CONTROL_PROPERTIES
         ]
 
         if not int_props:
@@ -465,7 +478,7 @@ class XHouseController(hass.Hass):
 
     # ── Device control ──────────────────────────────────────────────────
 
-    def control_device(self, entity_id, turn_on=True):
+    def control_device(self, entity_id, turn_on=True, action=None):
         if not self._ensure_logged_in():
             return False
 
@@ -482,16 +495,35 @@ class XHouseController(hass.Hass):
             self.log(f"Cannot control {entity_id}: device is offline", level="WARNING")
             return False
 
-        action = ("Open" if turn_on else "Close") if is_cover else ("On" if turn_on else "Off")
-        self.log(f"Sending '{action}' to device {device_id} ({info['name']})")
+        command_keys = info.get("command_keys")
 
-        prop_key = info.get("property_key", "Switch_1")
-        body = {
-            "deviceId": int(device_id),
-            "userId": int(self.user_id),
-            "propertyValue": {prop_key: 1 if turn_on else 0},
-            "action": "On" if turn_on else "Off",
-        }
+        if command_keys:
+            if action is None:
+                action = "open" if turn_on else "close"
+            cmd_key = command_keys.get(action)
+            if not cmd_key:
+                self.log(f"Unsupported action '{action}' for {entity_id}", level="ERROR")
+                return False
+            label = action.capitalize()
+            self.log(f"Sending '{label}' to device {device_id} ({info['name']})")
+            body = {
+                "deviceId": int(device_id),
+                "userId": int(self.user_id),
+                "propertyValue": {cmd_key: 1},
+                "action": label,
+            }
+        else:
+            action = None  # not used for toggle-style devices
+            label = ("Open" if turn_on else "Close") if is_cover else ("On" if turn_on else "Off")
+            self.log(f"Sending '{label}' to device {device_id} ({info['name']})")
+            prop_key = info.get("property_key", "Switch_1")
+            body = {
+                "deviceId": int(device_id),
+                "userId": int(self.user_id),
+                "propertyValue": {prop_key: 1 if turn_on else 0},
+                "action": "On" if turn_on else "Off",
+            }
+
         self._debug(f"Control body: {json.dumps(body)}")
 
         data = self._api_post("wifi/sendWifiCode", body)
@@ -500,14 +532,17 @@ class XHouseController(hass.Hass):
         self._debug_response(f"CONTROL RESPONSE (device {device_id})", data)
 
         if data.get("code") == "0":
-            self.log(f"Successfully sent {action.lower()} to device {device_id}")
-            new_state = self._state_for_value(entity_id, turn_on)
+            self.log(f"Successfully sent {label.lower()} to device {device_id}")
+            if command_keys and action == "stop":
+                new_state = self.get_state(entity_id) or "open"
+            else:
+                new_state = self._state_for_value(entity_id, turn_on)
             info["connection_state"] = "online"
             info["last_good_state"] = new_state
             self._update_entity(entity_id, new_state, {"connection_state": "online"})
             return True
 
-        handled = self._handle_token_error(data, self.control_device, entity_id, turn_on)
+        handled = self._handle_token_error(data, self.control_device, entity_id, turn_on, action)
         if handled is not False:
             return bool(handled)
         if "device offline" in (data.get("msg") or "").lower():
@@ -543,6 +578,8 @@ class XHouseController(hass.Hass):
                 self.control_device(entity, turn_on=True)
             elif service in ("turn_off", "close_cover"):
                 self.control_device(entity, turn_on=False)
+            elif service == "stop_cover":
+                self.control_device(entity, action="stop")
             elif service == "toggle":
                 is_cover = entity.startswith("cover.")
                 current = self.get_state(entity)
