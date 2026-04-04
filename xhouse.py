@@ -46,6 +46,7 @@ class XHouseController(hass.Hass):
         for domain, services in [
             ("switch", ["turn_on", "turn_off", "toggle"]),
             ("cover", ["open_cover", "close_cover", "stop_cover", "toggle"]),
+            ("button", ["press"]),
         ]:
             for service in services:
                 self.listen_event(
@@ -335,11 +336,51 @@ class XHouseController(hass.Hass):
             connection_state=c["connection_state"], state=state, attributes=attrs,
         )
 
-        # EGA gates use Switch_1 with values: 0=close, 1=open, 2=stop, 3=pedestrian
+        # EGA gates use SET_MENU hex protocol: 3A + bleCode + 04 + action
         if "EGA" in model:
-            self.devices[entity_id]["command_values"] = {
-                "open": 1, "close": 0, "stop": 2, "pedestrian": 3,
-            }
+            ble_code = next(
+                (p.get("value") for p in device.get("properties", [])
+                 if p.get("key") == "bleCode"),
+                None,
+            )
+            if ble_code:
+                self.devices[entity_id]["ble_code"] = ble_code
+                self.devices[entity_id]["ega_actions"] = {
+                    "open": "01", "close": "02", "stop": "03", "pedestrian": "04",
+                }
+                # Create a pedestrian button entity
+                ped_id = f"button.xhouse_{did_str}_pedestrian"
+                ped_attrs = {
+                    "friendly_name": f"{alias} Pedestrian",
+                    "device_class": "button",
+                    "device_id": did_str,
+                    "model": model,
+                    "icon": "mdi:walk",
+                    "connection_state": c["connection_state"],
+                }
+                self.devices[ped_id] = {
+                    "id": did,
+                    "name": f"{alias} Pedestrian",
+                    "original_name": c["alias"],
+                    "model": model,
+                    "type": c["device_type"],
+                    "device_class": "button",
+                    "is_cover": False,
+                    "property_key": "Switch_1",
+                    "connection_state": c["connection_state"],
+                    "last_good_state": "off",
+                    "ble_code": ble_code,
+                    "ega_actions": {"pedestrian": "04"},
+                    "parent_entity": entity_id,
+                }
+                state = "unavailable" if not c["online"] else "off"
+                self.set_state(ped_id, state=state, attributes=ped_attrs)
+                self.log(f"Created button entity {ped_id} for {alias} Pedestrian")
+            else:
+                self.log(
+                    f"EGA device {did} missing bleCode, cannot build commands",
+                    level="WARNING",
+                )
 
     def _register_generic_device(self, device):
         """Register a switch entity for each INT property on an unknown device."""
@@ -444,6 +485,43 @@ class XHouseController(hass.Hass):
 
     # ── Device state ────────────────────────────────────────────────────
 
+    @staticmethod
+    def _parse_ega_status(status_hex):
+        """Parse the EGA status hex blob to determine gate position.
+
+        Format: {header:1byte}{bleCode:4bytes}{11 data bytes}{pos_L:1}{pos_R:1}{extra:1}{0F0F}
+        Header (hex[0:2]):   0x32 = idle, 0x41 = active/transitioning
+        B6 (hex[12:14]):     direction hint: 00=closing, 01=opening, 02=idle/stopped
+        B16-B17 (hex[32:36]): left/right wing positions (0x00=closed .. 0x64=open)
+
+        Returns dict with state, position (0-100), pos_left, pos_right; or None.
+        """
+        if not status_hex or len(status_hex) < 36:
+            return None
+        header = int(status_hex[0:2], 16)
+        direction = int(status_hex[12:14], 16)
+        pos_left = int(status_hex[32:34], 16)
+        pos_right = int(status_hex[34:36], 16)
+        position = max(pos_left, pos_right)
+
+        # Active + direction hint present → in motion
+        if header == 0x41 and direction == 0x01:
+            state = "opening"
+        elif header == 0x41 and direction == 0x00:
+            state = "closing"
+        # Both wings at zero position = closed
+        elif pos_left == 0 and pos_right == 0:
+            state = "closed"
+        else:
+            state = "open"
+
+        return {
+            "state": state,
+            "position": position,
+            "pos_left": pos_left,
+            "pos_right": pos_right,
+        }
+
     def _get_device_state(self, device_id):
         if not self._ensure_logged_in():
             return
@@ -463,6 +541,29 @@ class XHouseController(hass.Hass):
                 for p in (data.get("result") or {}).get("properties") or []
             }
             for eid, info in self._entities_for_device(device_id):
+                # Button entities don't have meaningful state to poll
+                if eid.startswith("button."):
+                    continue
+                # EGA devices: decode gate position from status hex blob
+                if info.get("ega_actions"):
+                    parsed = self._parse_ega_status(prop_values.get("status"))
+                    if parsed:
+                        new_state = parsed["state"]
+                        extra = {
+                            "current_position": parsed["position"],
+                            "wing_left": parsed["pos_left"],
+                            "wing_right": parsed["pos_right"],
+                        }
+                        self._update_entity(eid, new_state, extra)
+                        info["last_good_state"] = new_state
+                        self._debug(
+                            f"Updated {eid} to {new_state} "
+                            f"pos={parsed['position']}% "
+                            f"(L={parsed['pos_left']}% R={parsed['pos_right']}%)"
+                        )
+                    else:
+                        self._debug(f"Could not parse EGA status for {eid}")
+                    continue
                 is_on = prop_values.get(info.get("property_key", "Switch_1")) == "1"
                 new_state = self._state_for_value(eid, is_on)
                 self._update_entity(eid, new_state)
@@ -498,8 +599,27 @@ class XHouseController(hass.Hass):
             return False
 
         command_values = info.get("command_values")
+        ega_actions = info.get("ega_actions")
 
-        if command_values:
+        if ega_actions:
+            # EGA SET_MENU hex protocol
+            if action is None:
+                action = "open" if turn_on else "close"
+            action_code = ega_actions.get(action)
+            if not action_code:
+                self.log(f"Unsupported action '{action}' for {entity_id}", level="ERROR")
+                return False
+            ble_code = info["ble_code"]
+            hex_value = f"3A{ble_code}04{action_code}"
+            label = action.capitalize()
+            self.log(f"Sending '{label}' to device {device_id} ({info['name']})")
+            body = {
+                "deviceId": int(device_id),
+                "userId": int(self.user_id),
+                "propertyValue": {"type": "SET_MENU", "object": {"value": hex_value}},
+                "action": "",
+            }
+        elif command_values:
             if action is None:
                 action = "open" if turn_on else "close"
             if action not in command_values:
@@ -535,8 +655,16 @@ class XHouseController(hass.Hass):
 
         if data.get("code") == "0":
             self.log(f"Successfully sent {label.lower()} to device {device_id}")
-            if command_values and action == "stop":
+            if action == "stop":
                 new_state = self.get_state(entity_id) or "open"
+            elif action == "pedestrian":
+                parent = info.get("parent_entity", entity_id)
+                if parent in self.devices:
+                    self.devices[parent]["last_good_state"] = "open"
+                    self._update_entity(parent, "opening", {"connection_state": "online"})
+                new_state = self.get_state(entity_id) or "open"
+            elif ega_actions:
+                new_state = "opening" if action == "open" else "closing"
             else:
                 new_state = self._state_for_value(entity_id, turn_on)
             info["connection_state"] = "online"
@@ -567,7 +695,9 @@ class XHouseController(hass.Hass):
         entities = raw_ids if isinstance(raw_ids, list) else [raw_ids]
 
         for entity in entities:
-            if not (entity.startswith("switch.xhouse_") or entity.startswith("cover.xhouse_")):
+            if not (entity.startswith("switch.xhouse_")
+                    or entity.startswith("cover.xhouse_")
+                    or entity.startswith("button.xhouse_")):
                 continue
 
             self._debug(f"Service call: {service} for {entity}")
@@ -582,6 +712,8 @@ class XHouseController(hass.Hass):
                 self.control_device(entity, turn_on=False)
             elif service == "stop_cover":
                 self.control_device(entity, action="stop")
+            elif service == "press":
+                self.control_device(entity, action="pedestrian")
             elif service == "toggle":
                 is_cover = entity.startswith("cover.")
                 current = self.get_state(entity)
