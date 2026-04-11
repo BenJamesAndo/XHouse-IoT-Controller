@@ -10,7 +10,7 @@ from datetime import datetime
 class XHouseController(hass.Hass):
     """AppDaemon app to control XHouse IOT devices from Home Assistant."""
 
-    API_BASE_URL = "http://47.52.111.184:9010/xhouseAppEncapsulation"
+    API_BASE_URL = "https://iemp.giigleiot.net/xhouseAppEncapsulation"
     HMAC_SECRET_KEY = "juge2020@giigleiot"
     SAAS_CODE = "JUJIANG"
     PLATFORM_CODE = "giigle"
@@ -487,33 +487,43 @@ class XHouseController(hass.Hass):
 
     @staticmethod
     def _parse_ega_status(status_hex):
-        """Parse the EGA status hex blob to determine gate position.
+        """Parse the EGA status hex blob to determine gate state.
 
-        Format: {header:1byte}{bleCode:4bytes}{11 data bytes}{pos_L:1}{pos_R:1}{extra:1}{0F0F}
-        Header (hex[0:2]):   0x32 = idle, 0x41 = active/transitioning
-        B6 (hex[12:14]):     direction hint: 00=closing, 01=opening, 02=idle/stopped
-        B16-B17 (hex[32:36]): left/right wing positions (0x00=closed .. 0x64=open)
+        Hex offsets (character positions in the hex string):
+          [0:2]   - Header byte (0x32=idle, 0x41=active)
+          [2:10]  - BLE code (4 bytes, device identifier)
+          [10:12] - Door state enum: 0=open, 1=closed, 2=opening, 3=closing
+          [12:14] - Air/environment status
+          [18:20] - Left door position (0=closed .. 100=fully open)
 
         Returns dict with state, position (0-100), pos_left, pos_right; or None.
         """
-        if not status_hex or len(status_hex) < 36:
+        if not status_hex or len(status_hex) < 12:
             return None
-        header = int(status_hex[0:2], 16)
-        direction = int(status_hex[12:14], 16)
-        pos_left = int(status_hex[32:34], 16)
-        pos_right = int(status_hex[34:36], 16)
-        position = max(pos_left, pos_right)
 
-        # Active + direction hint present → in motion
-        if header == 0x41 and direction == 0x01:
-            state = "opening"
-        elif header == 0x41 and direction == 0x00:
-            state = "closing"
-        # Both wings at zero position = closed
-        elif pos_left == 0 and pos_right == 0:
-            state = "closed"
-        else:
-            state = "open"
+        door_state = int(status_hex[10:12], 16)
+
+        # State enum from byte 5 — the primary status indicator
+        STATE_MAP = {
+            0: "open",       # At least one door is open
+            1: "closed",     # All doors closed
+            2: "opening",    # Moving towards open
+            3: "closing",    # Moving towards close
+        }
+        state = STATE_MAP.get(door_state, "open")
+
+        # Left door position at [18:20] if available
+        pos_left = 0
+        if len(status_hex) >= 20:
+            pos_left = int(status_hex[18:20], 16)
+            # Refine opening/closing with position info
+            if door_state == 2 and pos_left >= 100:
+                state = "open"
+            elif door_state == 3 and pos_left == 0:
+                state = "closed"
+
+        pos_right = 0
+        position = pos_left
 
         return {
             "state": state,
