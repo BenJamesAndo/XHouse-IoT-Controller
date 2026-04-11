@@ -1,0 +1,31 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "XHouse Account",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid email or password",
+      "cannot_connect": "Unable to connect to XHouse API"
+    },
+    "abort": {
+      "already_configured": "This account is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "XHouse Options",
+        "data": {
+          "refresh_interval": "Refresh interval (seconds)",
+          "debug_mode": "Enable debug logging"
+        }
+      }
+    }
+  }
+}
