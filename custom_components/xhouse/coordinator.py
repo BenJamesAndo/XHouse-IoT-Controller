@@ -45,29 +45,30 @@ class XHouseDeviceData:
 
 
 def parse_ega_status(status_hex: str | None) -> dict[str, Any] | None:
-    if not status_hex or len(status_hex) < 12:
+    """Parse the EGA status hex blob to determine gate position.
+
+    Format: {header:1byte}{bleCode:4bytes}{11 data bytes}{pos_L:1}{pos_R:1}{extra:1}{0F0F}
+    Header (hex[0:2]):   0x32 = idle, 0x41 = active/transitioning
+    B6 (hex[12:14]):     direction hint: 00=closing, 01=opening, 02=idle/stopped
+    B16-B17 (hex[32:36]): left/right wing positions (0x00=closed .. 0x64=open)
+    """
+    if not status_hex or len(status_hex) < 36:
         return None
 
-    door_state = int(status_hex[10:12], 16)
+    header = int(status_hex[0:2], 16)
+    direction = int(status_hex[12:14], 16)
+    pos_left = int(status_hex[32:34], 16)
+    pos_right = int(status_hex[34:36], 16)
+    position = max(pos_left, pos_right)
 
-    STATE_MAP = {
-        0: "open",
-        1: "closed",
-        2: "opening",
-        3: "closing",
-    }
-    state = STATE_MAP.get(door_state, "open")
-
-    pos_left = 0
-    if len(status_hex) >= 20:
-        pos_left = int(status_hex[18:20], 16)
-        if door_state == 2 and pos_left >= 100:
-            state = "open"
-        elif door_state == 3 and pos_left == 0:
-            state = "closed"
-
-    pos_right = 0
-    position = pos_left
+    if header == 0x41 and direction == 0x01:
+        state = "opening"
+    elif header == 0x41 and direction == 0x00:
+        state = "closing"
+    elif pos_left == 0 and pos_right == 0:
+        state = "closed"
+    else:
+        state = "open"
 
     return {
         "state": state,
