@@ -51,3 +51,7 @@ After setup, click **Configure** on the integration to adjust:
 ## Links
 
 - [Community thread](https://community.home-assistant.io/t/sgc01-smart-wifi-garage-opener/457208/8)
+
+## Screenshot
+<img width="989" height="271" alt="image" src="https://github.com/user-attachments/assets/6e97540f-8d7e-4aaa-ad4b-ceabdecd9298" />
+
