@@ -40,7 +40,7 @@ async def async_setup_entry(
 def _determine_device_class(dev: XHouseDeviceData) -> CoverDeviceClass:
     alias_lower = dev.alias.lower()
     model = dev.model
-    if "XH-SGC01" in model or "EGA" in model:
+    if "XH-SGC01" in model or "EGA" in model or "EGB" in model:
         return CoverDeviceClass.GATE
     if "gate" in alias_lower:
         return CoverDeviceClass.GATE
@@ -99,6 +99,8 @@ class XHouseEgaCover(XHouseEntity, CoverEntity):
     _attr_supported_features = (
         CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE | CoverEntityFeature.STOP
     )
+    # Keep all action buttons available in case of partial open/close from pedestrian events.
+    _attr_assumed_state = True   
 
     def __init__(
         self,
@@ -182,4 +184,4 @@ class XHouseEgaCover(XHouseEntity, CoverEntity):
         except XHouseApiError as err:
             LOGGER.error("Failed to control EGA cover %s: %s", self.entity_id, err)
             return
-        await self.coordinator.async_request_refresh()
+        self.coordinator.start_fast_poll()

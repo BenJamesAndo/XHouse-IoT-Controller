@@ -16,7 +16,7 @@ SAAS_CODE = "JUJIANG"
 PLATFORM_CODE = "giigle"
 APP_TYPE = "android"
 
-KNOWN_MODELS = ["XH-SGC01", "EGA"]
+KNOWN_MODELS = ["XH-SGC01", "EGA", "EGB"]
 
 NON_CONTROL_PROPERTIES = {
     "VoiceControl",

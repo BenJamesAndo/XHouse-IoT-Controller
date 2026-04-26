@@ -60,4 +60,4 @@ class XHousePedestrianButton(XHouseEntity, ButtonEntity):
         except XHouseApiError as err:
             LOGGER.error("Failed to send pedestrian command for %s: %s", self.entity_id, err)
             return
-        await self.coordinator.async_request_refresh()
+        self.coordinator.start_fast_poll()
