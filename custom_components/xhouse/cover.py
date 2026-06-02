@@ -13,7 +13,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from . import XHouseConfigEntry
 from .api import XHouseApiError
 from .const import LOGGER
-from .coordinator import XHouseDeviceData, parse_ega_status
+from .coordinator import XHouseDeviceData, parse_ega_status, parse_gate_mode
 from .entity import XHouseEntity
 
 
@@ -121,7 +121,7 @@ class XHouseEgaCover(XHouseEntity, CoverEntity):
         data = self.device_data
         if data is None or not data.online:
             return None
-        return parse_ega_status(data.prop_values.get("status"))
+        return parse_ega_status(data.prop_values.get("status"), self._gate_mode)
 
     @property
     def is_closed(self) -> bool | None:
@@ -148,14 +148,19 @@ class XHouseEgaCover(XHouseEntity, CoverEntity):
         return status["position"]
 
     @property
+    def _gate_mode(self) -> str:
+        data = self.device_data
+        menu_code = data.prop_values.get("menuCode") if data else None
+        return parse_gate_mode(menu_code)
+
+    @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        attrs: dict[str, Any] = {"gate_mode": self._gate_mode}
         status = self._ega_status
-        if status is None:
-            return {}
-        return {
-            "wing_left": status["pos_left"],
-            "wing_right": status["pos_right"],
-        }
+        if status is not None:
+            attrs["wing_left"] = status["pos_left"]
+            attrs["wing_right"] = status["pos_right"]
+        return attrs
 
     async def async_open_cover(self, **kwargs: Any) -> None:
         await self._send_ega_command("01")

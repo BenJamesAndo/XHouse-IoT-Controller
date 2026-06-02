@@ -50,30 +50,37 @@ class XHouseDeviceData:
         ]
 
 
-def parse_ega_status(status_hex: str | None) -> dict[str, Any] | None:
-    """Parse the EGA/EGB status hex blob.
+# Menu item id (in the EGA/EGB ``menuCode`` blob) that selects how many
+# gate wings the controller drives.
+GATE_MODE_MENU_ITEM = 0x3E
+GATE_MODE_SINGLE = "single"
+GATE_MODE_DOUBLE = "double"
 
-    Layout (derived from decompiled NewWifiBleSmartDoorDetailActivity and
-    confirmed against live EGA15 captures):
 
-      [0:2]   header             0x32 = idle, 0x41 = active/transitioning
-      [2:10]  bleCode (4 bytes)
-      [10:12] aggregate state    00 = at least one wing open
-                                 01 = all wings closed
-                                 02 = opening (motion)
-                                 03 = closing (motion)
-      [12:14] wing-A direction   00 = closing dir, 01 = opening dir,
-      [14:16] wing-B direction   02 = stopped
-      [34:36] wing-A position    0x00..0x64  -> 0..100 %
-      [36:38] wing-B position
-      [38:42] trailer            typically 0A 0A
+def parse_gate_mode(menu_code_hex: str | None) -> str:
+    """Return the gate wing mode from the EGA/EGB ``menuCode`` blob.
 
-    For pedestrian operation only one wing moves, so when motion ends one
-    wing is at 100 and the other at 0. Position is reported as the average
-    of both wings so HA renders ~50 % rather than 100 % (which would look
-    like fully open). Per-wing values are surfaced via ``pos_left`` /
-    ``pos_right``.
+    The menuCode is ``2F`` + 4-byte bleCode followed by a sequence of
+    ``[item_id][value]`` byte pairs (e.g. ``...3D013E003F06...``). Menu item
+    ``0x3E`` holds the wing count: ``0x00`` = double (twin-wing) gate,
+    ``0x01`` = single-wing gate.
     """
+    if menu_code_hex and len(menu_code_hex) >= 10:
+        body = menu_code_hex[10:]
+        try:
+            for i in range(0, len(body) - 3, 4):
+                if int(body[i:i + 2], 16) == GATE_MODE_MENU_ITEM:
+                    value = int(body[i + 2:i + 4], 16)
+                    return GATE_MODE_SINGLE if value == 0x01 else GATE_MODE_DOUBLE
+        except ValueError:
+            pass
+    return GATE_MODE_DOUBLE
+
+
+def parse_ega_status(
+    status_hex: str | None, gate_mode: str = GATE_MODE_DOUBLE
+) -> dict[str, Any] | None:
+
     if not status_hex or len(status_hex) < 38:
         return None
 
@@ -83,20 +90,38 @@ def parse_ega_status(status_hex: str | None) -> dict[str, Any] | None:
     dir_b = int(status_hex[14:16], 16)
     pos_left = int(status_hex[34:36], 16)
     pos_right = int(status_hex[36:38], 16)
-    position = (pos_left + pos_right) // 2
 
-    if door_enum == 0x02:
-        state = "opening"
-    elif door_enum == 0x03:
-        state = "closing"
-    elif door_enum == 0x01 or (pos_left == 0 and pos_right == 0):
-        state = "closed"
-    elif header == 0x41 and 0x01 in (dir_a, dir_b):
-        state = "opening"
-    elif header == 0x41 and 0x00 in (dir_a, dir_b):
-        state = "closing"
+    if gate_mode == GATE_MODE_SINGLE:
+        position = max(pos_left, pos_right)
+        # dir_b carries the moving leaf's direction (00 closing, 01 opening,
+        if door_enum == 0x02:
+            state = "opening"
+        elif door_enum == 0x03:
+            state = "closing"
+        elif dir_b == 0x01:
+            state = "opening"
+        elif dir_b == 0x00:
+            state = "closing"
+        elif pos_left == 0 and pos_right == 0:
+            state = "closed"
+        elif pos_left > 0 or pos_right > 0:
+            state = "open"
+        else:
+            state = "closed"
     else:
-        state = "open"
+        position = (pos_left + pos_right) // 2
+        if door_enum == 0x02:
+            state = "opening"
+        elif door_enum == 0x03:
+            state = "closing"
+        elif door_enum == 0x01 or (pos_left == 0 and pos_right == 0):
+            state = "closed"
+        elif header == 0x41 and 0x01 in (dir_a, dir_b):
+            state = "opening"
+        elif header == 0x41 and 0x00 in (dir_a, dir_b):
+            state = "closing"
+        else:
+            state = "open"
 
     return {
         "state": state,
