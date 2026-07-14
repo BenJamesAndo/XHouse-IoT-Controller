@@ -13,8 +13,14 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from . import XHouseConfigEntry
 from .api import XHouseApiError
 from .const import LOGGER
-from .coordinator import XHouseDeviceData, parse_ega_status, parse_gate_mode
+from .coordinator import XHouseDeviceData
 from .entity import XHouseEntity
+from .protocol import (
+    GATE_MODE_SINGLE,
+    parse_ega_status,
+    parse_egb_status,
+    parse_gate_mode,
+)
 
 
 async def async_setup_entry(
@@ -29,8 +35,8 @@ async def async_setup_entry(
         if not dev.is_known_model:
             continue
         device_class = _determine_device_class(dev)
-        if dev.is_ega:
-            entities.append(XHouseEgaCover(coordinator, device_id, device_class))
+        if dev.is_ble_gate:
+            entities.append(XHouseGateCover(coordinator, device_id, device_class))
         else:
             entities.append(XHouseKnownCover(coordinator, device_id, device_class))
 
@@ -40,7 +46,7 @@ async def async_setup_entry(
 def _determine_device_class(dev: XHouseDeviceData) -> CoverDeviceClass:
     alias_lower = dev.alias.lower()
     model = dev.model
-    if "XH-SGC01" in model or "EGA" in model or "EGB" in model:
+    if "XH-SGC01" in model or dev.is_ble_gate:
         return CoverDeviceClass.GATE
     if "gate" in alias_lower:
         return CoverDeviceClass.GATE
@@ -95,12 +101,10 @@ class XHouseKnownCover(XHouseEntity, CoverEntity):
         await self.coordinator.async_request_refresh()
 
 
-class XHouseEgaCover(XHouseEntity, CoverEntity):
+class XHouseGateCover(XHouseEntity, CoverEntity):
     _attr_supported_features = (
         CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE | CoverEntityFeature.STOP
     )
-    # Keep all action buttons available in case of partial open/close from pedestrian events.
-    _attr_assumed_state = True   
 
     def __init__(
         self,
@@ -117,32 +121,40 @@ class XHouseEgaCover(XHouseEntity, CoverEntity):
         return data.ble_code if data else None
 
     @property
-    def _ega_status(self) -> dict | None:
+    def _gate_status(self) -> dict | None:
         data = self.device_data
         if data is None or not data.online:
             return None
-        return parse_ega_status(data.prop_values.get("status"), self._gate_mode)
+        status_hex = data.prop_values.get("status")
+        if data.is_egb:
+            return parse_egb_status(status_hex)
+        return parse_ega_status(status_hex, self._gate_mode)
 
     @property
     def is_closed(self) -> bool | None:
-        status = self._ega_status
+        status = self._gate_status
         if status is None:
             return None
         return status["state"] == "closed"
 
     @property
+    def assumed_state(self) -> bool:
+        """Use assumed controls only when no valid physical state is available."""
+        return self._gate_status is None
+
+    @property
     def is_opening(self) -> bool:
-        status = self._ega_status
+        status = self._gate_status
         return status is not None and status["state"] == "opening"
 
     @property
     def is_closing(self) -> bool:
-        status = self._ega_status
+        status = self._gate_status
         return status is not None and status["state"] == "closing"
 
     @property
     def current_cover_position(self) -> int | None:
-        status = self._ega_status
+        status = self._gate_status
         if status is None:
             return None
         return status["position"]
@@ -150,31 +162,37 @@ class XHouseEgaCover(XHouseEntity, CoverEntity):
     @property
     def _gate_mode(self) -> str:
         data = self.device_data
+        if data and data.is_egb:
+            return GATE_MODE_SINGLE
         menu_code = data.prop_values.get("menuCode") if data else None
         return parse_gate_mode(menu_code)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         attrs: dict[str, Any] = {"gate_mode": self._gate_mode}
-        status = self._ega_status
+        status = self._gate_status
         if status is not None:
-            attrs["wing_left"] = status["pos_left"]
-            attrs["wing_right"] = status["pos_right"]
+            data = self.device_data
+            if data and data.is_egb:
+                attrs["barrier_position"] = status["position"]
+            else:
+                attrs["wing_left"] = status["pos_left"]
+                attrs["wing_right"] = status["pos_right"]
         return attrs
 
     async def async_open_cover(self, **kwargs: Any) -> None:
-        await self._send_ega_command("01")
+        await self._send_gate_command("01")
 
     async def async_close_cover(self, **kwargs: Any) -> None:
-        await self._send_ega_command("02")
+        await self._send_gate_command("02")
 
     async def async_stop_cover(self, **kwargs: Any) -> None:
-        await self._send_ega_command("03")
+        await self._send_gate_command("03")
 
-    async def _send_ega_command(self, action_code: str) -> None:
+    async def _send_gate_command(self, action_code: str) -> None:
         ble_code = self._ble_code
         if not ble_code:
-            LOGGER.error("No bleCode for EGA device %s", self._device_id)
+            LOGGER.error("No bleCode for gate device %s", self._device_id)
             return
         hex_value = f"3A{ble_code}04{action_code}"
         api = self.coordinator.api
@@ -187,6 +205,6 @@ class XHouseEgaCover(XHouseEntity, CoverEntity):
         try:
             await api.send_command(body)
         except XHouseApiError as err:
-            LOGGER.error("Failed to control EGA cover %s: %s", self.entity_id, err)
+            LOGGER.error("Failed to control gate cover %s: %s", self.entity_id, err)
             return
         self.coordinator.start_fast_poll()

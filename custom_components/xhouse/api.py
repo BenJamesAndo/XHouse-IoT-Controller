@@ -109,6 +109,11 @@ class XHouseApi:
         return (data.get("result") or {}).get("deviceInfos") or []
 
     async def get_device_properties(self, device_id: int) -> dict[str, str]:
+        """Return device properties, including the live gate status frame.
+
+        The APK calls its polling helper ``getWifiDeviceKeysStatus``, but that
+        helper resolves to this ``wifi/getWifiProperties`` HTTP route.
+        """
         data = await self._api_post(
             "wifi/getWifiProperties",
             {"userId": int(self.user_id), "deviceId": device_id},

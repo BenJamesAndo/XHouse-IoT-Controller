@@ -19,11 +19,11 @@ async def async_setup_entry(
     entities: list[ButtonEntity] = []
 
     for device_id, dev in coordinator.data.items():
-        if not dev.is_ega:
+        if not dev.is_ble_gate:
             continue
         if dev.ble_code is None:
             LOGGER.warning(
-                "EGA device %s missing bleCode, skipping pedestrian button",
+                "Gate device %s missing bleCode, skipping pedestrian button",
                 device_id,
             )
             continue
@@ -45,7 +45,7 @@ class XHousePedestrianButton(XHouseEntity, ButtonEntity):
             return
         ble_code = data.ble_code
         if not ble_code:
-            LOGGER.error("No bleCode for EGA device %s", self._device_id)
+            LOGGER.error("No bleCode for gate device %s", self._device_id)
             return
         hex_value = f"3A{ble_code}0404"
         api = self.coordinator.api

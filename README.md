@@ -7,7 +7,7 @@ A Home Assistant custom integration for XHouse / Giigle IoT devices (gate contro
 ## Supported Devices
 
 - **XH-SGC01** — WiFi smart garage controller
-- **EGA18, EGA15 & EGB18** — Gate controller
+- **EGA18, EGA15, EGB18 & EGB1900** — Gate controllers
 - Other WiFi switch devices discovered on the account
 
 ## Installation

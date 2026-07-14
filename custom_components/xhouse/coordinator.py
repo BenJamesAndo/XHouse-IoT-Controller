@@ -27,13 +27,24 @@ class XHouseDeviceData:
 
     @property
     def is_known_model(self) -> bool:
-        return any(m in self.model for m in KNOWN_MODELS)
+        identifiers = f"{self.model} {self.device_type}".upper()
+        return any(model.upper() in identifiers for model in KNOWN_MODELS)
 
     @property
     def is_ega(self) -> bool:
-        # EGA (swing gate) and EGB (sliding gate) may share the same
-        # SET_MENU BLE command protocol and status hex blob format.
-        return "EGA" in self.model or "EGB" in self.model
+        identifiers = f"{self.model} {self.device_type}".upper()
+        return "EGA" in identifiers
+
+    @property
+    def is_egb(self) -> bool:
+        identifiers = f"{self.model} {self.device_type}".upper()
+        return "EGB" in identifiers or "PGB" in identifiers
+
+    @property
+    def is_ble_gate(self) -> bool:
+        # Both families use the SET_MENU BLE command protocol, but their
+        # status bytes have different meanings.
+        return self.is_ega or self.is_egb
 
     @property
     def ble_code(self) -> str | None:
@@ -48,87 +59,6 @@ class XHouseDeviceData:
             if (p.get("type") == "INT" or (p.get("key") or "").startswith("Switch_"))
             and p.get("key") not in NON_CONTROL_PROPERTIES
         ]
-
-
-# Menu item id (in the EGA/EGB ``menuCode`` blob) that selects how many
-# gate wings the controller drives.
-GATE_MODE_MENU_ITEM = 0x3E
-GATE_MODE_SINGLE = "single"
-GATE_MODE_DOUBLE = "double"
-
-
-def parse_gate_mode(menu_code_hex: str | None) -> str:
-    """Return the gate wing mode from the EGA/EGB ``menuCode`` blob.
-
-    The menuCode is ``2F`` + 4-byte bleCode followed by a sequence of
-    ``[item_id][value]`` byte pairs (e.g. ``...3D013E003F06...``). Menu item
-    ``0x3E`` holds the wing count: ``0x00`` = double (twin-wing) gate,
-    ``0x01`` = single-wing gate.
-    """
-    if menu_code_hex and len(menu_code_hex) >= 10:
-        body = menu_code_hex[10:]
-        try:
-            for i in range(0, len(body) - 3, 4):
-                if int(body[i:i + 2], 16) == GATE_MODE_MENU_ITEM:
-                    value = int(body[i + 2:i + 4], 16)
-                    return GATE_MODE_SINGLE if value == 0x01 else GATE_MODE_DOUBLE
-        except ValueError:
-            pass
-    return GATE_MODE_DOUBLE
-
-
-def parse_ega_status(
-    status_hex: str | None, gate_mode: str = GATE_MODE_DOUBLE
-) -> dict[str, Any] | None:
-
-    if not status_hex or len(status_hex) < 38:
-        return None
-
-    header = int(status_hex[0:2], 16)
-    door_enum = int(status_hex[10:12], 16)
-    dir_a = int(status_hex[12:14], 16)
-    dir_b = int(status_hex[14:16], 16)
-    pos_left = int(status_hex[34:36], 16)
-    pos_right = int(status_hex[36:38], 16)
-
-    if gate_mode == GATE_MODE_SINGLE:
-        position = max(pos_left, pos_right)
-        # dir_b carries the moving leaf's direction (00 closing, 01 opening,
-        if door_enum == 0x02:
-            state = "opening"
-        elif door_enum == 0x03:
-            state = "closing"
-        elif dir_b == 0x01:
-            state = "opening"
-        elif dir_b == 0x00:
-            state = "closing"
-        elif pos_left == 0 and pos_right == 0:
-            state = "closed"
-        elif pos_left > 0 or pos_right > 0:
-            state = "open"
-        else:
-            state = "closed"
-    else:
-        position = (pos_left + pos_right) // 2
-        if door_enum == 0x02:
-            state = "opening"
-        elif door_enum == 0x03:
-            state = "closing"
-        elif door_enum == 0x01 or (pos_left == 0 and pos_right == 0):
-            state = "closed"
-        elif header == 0x41 and 0x01 in (dir_a, dir_b):
-            state = "opening"
-        elif header == 0x41 and 0x00 in (dir_a, dir_b):
-            state = "closing"
-        else:
-            state = "open"
-
-    return {
-        "state": state,
-        "position": position,
-        "pos_left": pos_left,
-        "pos_right": pos_right,
-    }
 
 
 class XHouseCoordinator(DataUpdateCoordinator[dict[int, XHouseDeviceData]]):
