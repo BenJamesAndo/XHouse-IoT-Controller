@@ -50,6 +50,8 @@ async def _async_update_listener(hass: HomeAssistant, entry: XHouseConfigEntry) 
     coordinator: XHouseCoordinator = entry.runtime_data
     new_interval = entry.options.get(CONF_REFRESH_INTERVAL, DEFAULT_REFRESH_INTERVAL)
     coordinator.update_interval = timedelta(seconds=new_interval)
+    # Apply debug_mode immediately; "NOTSET" reverts to inheriting HA's level.
+    LOGGER.setLevel("DEBUG" if entry.options.get(CONF_DEBUG_MODE, False) else "NOTSET")
     await coordinator.async_request_refresh()
 
 

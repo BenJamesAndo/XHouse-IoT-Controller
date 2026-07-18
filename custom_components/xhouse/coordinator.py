@@ -134,10 +134,15 @@ class XHouseCoordinator(DataUpdateCoordinator[dict[int, XHouseDeviceData]]):
         for raw in raw_devices:
             dev = XHouseDeviceData(raw)
             devices[dev.device_id] = dev
+            LOGGER.debug("Raw device info: %s", raw)
 
             if dev.online:
                 try:
                     dev.prop_values = await self.api.get_device_properties(dev.device_id)
+                    LOGGER.debug(
+                        "Properties for device %s (model=%s): %s",
+                        dev.device_id, dev.model, dev.prop_values,
+                    )
                 except XHouseApiError as err:
                     if "device offline" in str(err).lower():
                         dev.online = False

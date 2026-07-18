@@ -2,21 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
-# Menu item id (in the EGA/EGB ``menuCode`` blob) that selects how many
-# gate wings the controller drives.
+# menuCode item id holding the wing count: 0x00 = double, 0x01 = single.
 GATE_MODE_MENU_ITEM = 0x3E
 GATE_MODE_SINGLE = "single"
 GATE_MODE_DOUBLE = "double"
 
 
 def parse_gate_mode(menu_code_hex: str | None) -> str:
-    """Return the gate wing mode from the EGA/EGB ``menuCode`` blob.
-
-    The menuCode is ``2F`` + 4-byte bleCode followed by a sequence of
-    ``[item_id][value]`` byte pairs (e.g. ``...3D013E003F06...``). Menu item
-    ``0x3E`` holds the wing count: ``0x00`` = double (twin-wing) gate,
-    ``0x01`` = single-wing gate.
-    """
+    """Return the gate wing mode from the EGA/EGB menuCode blob."""
     if menu_code_hex and len(menu_code_hex) >= 10:
         body = menu_code_hex[10:]
         try:
@@ -48,7 +41,6 @@ def parse_ega_status(
 
     if gate_mode == GATE_MODE_SINGLE:
         position = max(pos_left, pos_right)
-        # dir_b carries the moving leaf's direction (00 closing, 01 opening).
         if door_enum == 0x02:
             state = "opening"
         elif door_enum == 0x03:
@@ -86,12 +78,20 @@ def parse_ega_status(
     }
 
 
-def parse_egb_status(status_hex: str | None) -> dict[str, Any] | None:
-    """Parse an EGB/PGB barrier status frame, including EGB1900.
+# EGB/PGB door-state enum at status offset [10:12].
+_EGB_STATE_BY_CODE = {
+    0x00: "closing",
+    0x01: "opening",
+    0x02: "open",
+    0x03: "closed",
+}
 
-    Barrier controllers report their state in the first byte after the
-    four-byte BLE code: ``00`` is closed and ``01`` is open. Unlike EGA
-    swing-gate frames, a valid EGB frame may end immediately after that byte.
+
+def parse_egb_status(status_hex: str | None) -> dict[str, Any] | None:
+    """Parse an EGB/PGB barrier/sliding-gate status frame, including EGB1900.
+
+    Door state is at offset [10:12] (see ``_EGB_STATE_BY_CODE``); position, when
+    present, is at [18:20].
     """
     if not status_hex or len(status_hex) < 12:
         return None
@@ -101,13 +101,20 @@ def parse_egb_status(status_hex: str | None) -> dict[str, Any] | None:
     except (TypeError, ValueError):
         return None
 
-    if state_code == 0x00:
-        state = "closed"
-        position = 0
-    elif state_code == 0x01:
-        state = "open"
-        position = 100
-    else:
+    state = _EGB_STATE_BY_CODE.get(state_code)
+    if state is None:
         return None
+
+    position: int | None = None
+    if len(status_hex) >= 20:
+        try:
+            position = max(0, min(100, int(status_hex[18:20], 16)))
+        except ValueError:
+            position = None
+    if position is None:
+        if state == "open":
+            position = 100
+        elif state == "closed":
+            position = 0
 
     return {"state": state, "position": position}
