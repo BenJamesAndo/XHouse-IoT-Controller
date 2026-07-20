@@ -31,7 +31,7 @@ A Home Assistant custom integration for XHouse / Giigle IoT devices (gate contro
 
 1. Go to **Settings → Devices & Services → Add Integration**
 2. Search for **XHouse IoT Controller**
-3. Enter your XHouse account email and password
+3. Enter your XHouse account email and password. Use a second account linked to your device to prevent log outs on your app when using Home Assistant.
 
 ## Configuration
 
