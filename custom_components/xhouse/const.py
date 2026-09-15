@@ -28,4 +28,4 @@ NON_CONTROL_PROPERTIES = {
     "updateStatusTime",
 }
 
-PLATFORMS = ["cover", "switch", "button"]
+PLATFORMS = ["cover", "switch", "button", "sensor", "binary_sensor"]

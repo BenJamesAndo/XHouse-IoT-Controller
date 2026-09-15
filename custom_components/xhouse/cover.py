@@ -15,12 +15,7 @@ from .api import XHouseApiError
 from .const import LOGGER
 from .coordinator import XHouseDeviceData
 from .entity import XHouseEntity
-from .protocol import (
-    GATE_MODE_SINGLE,
-    parse_ega_status,
-    parse_egb_status,
-    parse_gate_mode,
-)
+from .protocol import GATE_MODE_DOUBLE, parse_ega_status, parse_egb_status
 
 
 async def async_setup_entry(
@@ -162,10 +157,7 @@ class XHouseGateCover(XHouseEntity, CoverEntity):
     @property
     def _gate_mode(self) -> str:
         data = self.device_data
-        if data and data.is_egb:
-            return GATE_MODE_SINGLE
-        menu_code = data.prop_values.get("menuCode") if data else None
-        return parse_gate_mode(menu_code)
+        return data.gate_mode if data else GATE_MODE_DOUBLE
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

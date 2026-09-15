@@ -68,6 +68,80 @@ class ProtocolTest(unittest.TestCase):
     def test_parse_ega_status_rejects_malformed_hex(self) -> None:
         self.assertIsNone(protocol.parse_ega_status("GG" * 19))
 
+    def test_parse_battery_reply_real_ega1800_captures(self) -> None:
+        # Captured live from an EGA1800 (firmware 2.0.5) via the regular
+        # passive "status" property (wifi/getWifiProperties), in three
+        # physical states.
+        no_battery_mains_on = "325279331900030300000000000000010000000B0D"
+        battery_mains_on = "325279331900030300006126000000010100000B0D"
+        battery_mains_off = "3252793319000303000060D3000000010100000B0D"
+
+        self.assertEqual(
+            protocol.parse_battery_reply(no_battery_mains_on),
+            {"voltage": 0.0, "battery_present": False},
+        )
+        self.assertEqual(
+            protocol.parse_battery_reply(battery_mains_on),
+            {"voltage": 24.87, "battery_present": True},
+        )
+        self.assertEqual(
+            protocol.parse_battery_reply(battery_mains_off),
+            {"voltage": 24.787, "battery_present": True},
+        )
+
+    def test_parse_battery_reply_rejects_short_or_missing_frames(self) -> None:
+        for frame in (None, "", "3252793319000303", "32" + "GG" * 20):
+            with self.subTest(frame=frame):
+                self.assertIsNone(protocol.parse_battery_reply(frame))
+
+    def test_estimate_battery_soc_no_battery_is_unknown(self) -> None:
+        self.assertIsNone(protocol.estimate_battery_soc(0.0, False))
+        self.assertIsNone(protocol.estimate_battery_soc(None, False))
+        self.assertIsNone(protocol.estimate_battery_soc(0.0, True))
+
+    def test_estimate_battery_soc_real_ega1800_captures(self) -> None:
+        # Same two "battery installed" captures as above; voltage is
+        # always halved (24V pack = two 12V cells in series) before
+        # looking it up on the 12V open-circuit-voltage curve.
+        self.assertEqual(protocol.estimate_battery_soc(24.87, True), 82)
+        self.assertEqual(protocol.estimate_battery_soc(24.787, True), 77)
+
+    def test_estimate_battery_soc_clamps_out_of_range_voltages(self) -> None:
+        self.assertEqual(protocol.estimate_battery_soc(5.0, True), 0)
+        self.assertEqual(protocol.estimate_battery_soc(30.0, True), 100)
+
+    def test_is_gate_in_motion_ega(self) -> None:
+        idle_closed = "325279331900030300006126000000010100000B0D"
+        # Same known-good frame as test_parse_ega_status_still_uses_swing_gate_semantics,
+        # with door_enum (hex[10:12]) forced to 0x02 ("opening").
+        opening = "419012855202020200000000000101010064640A0A"
+        self.assertFalse(protocol.is_gate_in_motion(idle_closed, is_egb=False))
+        self.assertTrue(protocol.is_gate_in_motion(opening, is_egb=False))
+
+    def test_is_gate_in_motion_egb(self) -> None:
+        self.assertFalse(protocol.is_gate_in_motion("321177078202", is_egb=True))
+        self.assertFalse(protocol.is_gate_in_motion("321177078203", is_egb=True))
+        self.assertTrue(protocol.is_gate_in_motion("321177078200", is_egb=True))
+        self.assertTrue(protocol.is_gate_in_motion("321177078201", is_egb=True))
+
+    def test_is_gate_in_motion_handles_missing_frame(self) -> None:
+        self.assertFalse(protocol.is_gate_in_motion(None, is_egb=False))
+        self.assertFalse(protocol.is_gate_in_motion(None, is_egb=True))
+
+    def test_is_gate_in_motion_requires_correct_gate_mode(self) -> None:
+        # door_enum=0x00 with dir_b=0x01 and zero position: the single-wing
+        # branch reads this as "opening" via dir_b, but the double-wing
+        # branch (the old hardcoded default) falls through to "closed"
+        # since position is still zero. Passing the wrong gate_mode here
+        # previously let motor-load voltage sag through as a real reading.
+        frame = "41527933190000010000000000000000000000"
+        self.assertFalse(
+            protocol.is_gate_in_motion(frame, is_egb=False, gate_mode=protocol.GATE_MODE_DOUBLE)
+        )
+        self.assertTrue(
+            protocol.is_gate_in_motion(frame, is_egb=False, gate_mode=protocol.GATE_MODE_SINGLE)
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
