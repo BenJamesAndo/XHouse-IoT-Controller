@@ -9,6 +9,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import XHouseApi, XHouseApiError, XHouseAuthError
 from .const import DOMAIN, KNOWN_MODELS, LOGGER, NON_CONTROL_PROPERTIES
+from .protocol import GATE_MODE_SINGLE, parse_gate_mode
 
 FAST_POLL_INTERVAL = 2.0  # seconds between refreshes during a burst
 FAST_POLL_DURATION = 30.0  # total burst length in seconds
@@ -45,6 +46,12 @@ class XHouseDeviceData:
         # Both families use the SET_MENU BLE command protocol, but their
         # status bytes have different meanings.
         return self.is_ega or self.is_egb
+
+    @property
+    def gate_mode(self) -> str:
+        if self.is_egb:
+            return GATE_MODE_SINGLE
+        return parse_gate_mode(self.prop_values.get("menuCode"))
 
     @property
     def ble_code(self) -> str | None:
