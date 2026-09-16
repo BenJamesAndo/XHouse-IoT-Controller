@@ -85,6 +85,13 @@ class XHouseDeviceData:
             by_key[key] for key in TRIGGER_KEY_PROPERTIES if key in by_key
         ]
 
+    def get_property_mode(self, property_key: str) -> str | None:
+        """Return a property's ``mode``, which distinguishes channel types."""
+        for p in self.properties:
+            if p.get("key") == property_key:
+                return p.get("mode")
+        return None
+
     @property
     def ble_code(self) -> str | None:
         for p in self.properties:

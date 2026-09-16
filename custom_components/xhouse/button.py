@@ -8,7 +8,10 @@ from . import XHouseConfigEntry
 from .api import XHouseApiError
 from .const import LOGGER
 from .entity import XHouseEntity
-from .protocol import build_trigger_key_property_value, trigger_key_switch_id
+from .protocol import (
+    build_trigger_key_property_value,
+    trigger_key_channel_number,
+)
 
 
 async def async_setup_entry(
@@ -79,7 +82,11 @@ class XHousePedestrianButton(XHouseEntity, ButtonEntity):
 
 
 class XHouseTriggerKeyButton(XHouseEntity, ButtonEntity):
-    """One momentary trigger channel on an SM05/SM18 receiver module."""
+    """One channel on an SM18/SM05 receiver module.
+
+    Momentary channels pulse; latching ones toggle, matching the single button
+    the app shows per channel.
+    """
 
     _attr_icon = "mdi:gesture-tap-button"
 
@@ -91,7 +98,8 @@ class XHouseTriggerKeyButton(XHouseEntity, ButtonEntity):
         property_name: str | None,
     ) -> None:
         super().__init__(coordinator, device_id, property_key.lower())
-        self._switch_id = trigger_key_switch_id(property_key)
+        self._property_key = property_key
+        self._channel = trigger_key_channel_number(property_key)
         self._attr_name = property_name or property_key
 
     async def async_press(self) -> None:
@@ -99,7 +107,7 @@ class XHouseTriggerKeyButton(XHouseEntity, ButtonEntity):
         if data is None:
             return
         ble_code = data.ble_code
-        if not ble_code or self._switch_id is None:
+        if not ble_code or self._channel is None:
             LOGGER.error("Cannot build trigger command for %s", self.entity_id)
             return
         api = self.coordinator.api
@@ -107,13 +115,17 @@ class XHouseTriggerKeyButton(XHouseEntity, ButtonEntity):
             "deviceId": self._device_id,
             "userId": int(api.user_id),
             "propertyValue": build_trigger_key_property_value(
-                ble_code, self._switch_id
+                ble_code,
+                self._property_key,
+                data.prop_values.get(self._property_key),
+                data.get_property_mode(self._property_key),
             ),
-            # The app sends the channel's label here; it only feeds the
-            # activity log on the XHouse side.
-            "action": self._attr_name,
+            # The app sends the channel number here, not the channel's label.
+            "action": self._channel,
         }
         try:
             await api.send_command(body)
         except XHouseApiError as err:
             LOGGER.error("Failed to trigger %s: %s", self.entity_id, err)
+            return
+        await self.coordinator.async_request_refresh()

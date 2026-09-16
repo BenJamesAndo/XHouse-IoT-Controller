@@ -152,29 +152,52 @@ class ProtocolTest(unittest.TestCase):
 
 
 class TriggerKeyTest(unittest.TestCase):
-    def test_switch_id_is_one_based_and_zero_padded(self) -> None:
+    def test_switch_id_and_channel_number(self) -> None:
         cases = [
-            ("Switch_1", "01"),
-            ("Switch_2", "02"),
-            ("Switch_3", "03"),
-            ("Switch_4", "04"),
+            ("Switch_1", "01", "1"),
+            ("Switch_2", "02", "2"),
+            ("Switch_3", "03", "3"),
+            ("Switch_4", "04", "4"),
         ]
-        for key, switch_id in cases:
+        for key, switch_id, channel in cases:
             with self.subTest(key=key):
                 self.assertEqual(protocol.trigger_key_switch_id(key), switch_id)
+                self.assertEqual(
+                    protocol.trigger_key_channel_number(key), channel
+                )
 
     def test_non_channel_keys_are_rejected(self) -> None:
         for key in ("Switch_5", "Switch_0", "bleCode", "status", ""):
             with self.subTest(key=key):
                 self.assertIsNone(protocol.trigger_key_switch_id(key))
+                self.assertIsNone(protocol.trigger_key_channel_number(key))
+
+    def test_momentary_channel_always_pulses(self) -> None:
+        for value in ("0", "1", None, ""):
+            with self.subTest(value=value):
+                self.assertEqual(protocol.trigger_key_action(value, "1"), 2)
+                self.assertEqual(
+                    protocol.trigger_key_target_value(value, "1"), "1"
+                )
+
+    def test_latching_channel_toggles(self) -> None:
+        # Off (or unreadable) turns on; on turns off.
+        self.assertEqual(protocol.trigger_key_action("0", "0"), 1)
+        self.assertEqual(protocol.trigger_key_target_value("0", "0"), "1")
+        self.assertEqual(protocol.trigger_key_action("1", "0"), 0)
+        self.assertEqual(protocol.trigger_key_target_value("1", "0"), "0")
+        self.assertEqual(protocol.trigger_key_action(None, None), 1)
 
     def test_property_value_matches_app_payload(self) -> None:
         self.assertEqual(
-            protocol.build_trigger_key_property_value("11770782", "03"),
+            protocol.build_trigger_key_property_value(
+                "11770782", "Switch_3", "0", "1"
+            ),
             {
                 "bleCode": "11770782",
                 "type": "TRIGGER_KEY",
-                "object": {"switchId": "03"},
+                "Switch_3": "1",
+                "object": {"switchId": "03", "action": 2},
             },
         )
 

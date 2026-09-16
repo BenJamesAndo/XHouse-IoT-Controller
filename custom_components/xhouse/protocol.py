@@ -183,17 +183,26 @@ def is_gate_in_motion(
     return status is not None and status["state"] in ("opening", "closing")
 
 
-# SM05/SM18 WiFi/RF receiver modules (deviceType WIFI_SM05_02, WIFI_SM18_03)
-# expose up to four momentary trigger channels as properties Switch_1..Switch_4,
-# each property's ``name`` being the user's label for that channel. Pressing one
-# sends a TRIGGER_KEY command carrying the channel's 1-based index as a
-# zero-padded string. These channels have no readable on/off state: the app only
-# ever renders their labels, so they are buttons rather than switches.
+# SM18/SM05 WiFi/RF receiver modules expose up to four channels as properties
+# Switch_1..Switch_4, each property's ``name`` being the user's label. Pressing a
+# channel sends a TRIGGER_KEY command. SM18-03W (WIFI_SM18_03) is driven by
+# WifiRfBleControlDetailActivity, which sends a richer payload than the SM05-only
+# WifiSM05W02DetailActivity: it also carries the channel's target value and an
+# ``action`` opcode, and its envelope ``action`` is the channel number.
 TRIGGER_KEY_PROPERTIES = ("Switch_1", "Switch_2", "Switch_3", "Switch_4")
+
+# A channel whose ``mode`` is "1" is a momentary trigger (gate-style pulse);
+# anything else is a latching relay that toggles.
+TRIGGER_MODE_MOMENTARY = "1"
+
+# ``object.action`` opcodes, from the app's getBtnAction(value, mode).
+TRIGGER_ACTION_OFF = 0
+TRIGGER_ACTION_ON = 1
+TRIGGER_ACTION_PULSE = 2
 
 
 def trigger_key_switch_id(property_key: str) -> str | None:
-    """Return the ``switchId`` for an SM05/SM18 channel, or None if not one."""
+    """Return the ``switchId`` for a Switch_N channel, or None if not one."""
     try:
         index = TRIGGER_KEY_PROPERTIES.index(property_key)
     except ValueError:
@@ -201,12 +210,57 @@ def trigger_key_switch_id(property_key: str) -> str | None:
     return f"{index + 1:02d}"
 
 
+def trigger_key_channel_number(property_key: str) -> str | None:
+    """Return the channel number the app puts in the envelope ``action``."""
+    switch_id = trigger_key_switch_id(property_key)
+    return None if switch_id is None else str(int(switch_id))
+
+
+def _current_is_on(current_value: str | None) -> bool:
+    """Mirror the app's StringUtils.ChangeInt, which yields 0 on bad input."""
+    try:
+        return int(current_value) == 1
+    except (TypeError, ValueError):
+        return False
+
+
+def trigger_key_action(current_value: str | None, mode: str | None) -> int:
+    """Port of the app's getBtnAction(value, mode).
+
+    A momentary channel always pulses; a latching one toggles against its
+    current value.
+    """
+    if mode == TRIGGER_MODE_MOMENTARY:
+        return TRIGGER_ACTION_PULSE
+    if _current_is_on(current_value):
+        return TRIGGER_ACTION_OFF
+    return TRIGGER_ACTION_ON
+
+
+def trigger_key_target_value(current_value: str | None, mode: str | None) -> str:
+    """Return the channel's target value, as the app computes it.
+
+    Always "1" except for a latching channel that is currently on, which is
+    being switched off.
+    """
+    if current_value != "0" and mode != TRIGGER_MODE_MOMENTARY:
+        return "0"
+    return "1"
+
+
 def build_trigger_key_property_value(
-    ble_code: str, switch_id: str
+    ble_code: str,
+    property_key: str,
+    current_value: str | None,
+    mode: str | None,
 ) -> dict[str, Any]:
-    """Build the ``propertyValue`` for an SM05/SM18 momentary key press."""
+    """Build the ``propertyValue`` for an SM18/SM05 channel press."""
     return {
         "bleCode": ble_code,
         "type": "TRIGGER_KEY",
-        "object": {"switchId": switch_id},
+        property_key: trigger_key_target_value(current_value, mode),
+        "object": {
+            "switchId": trigger_key_switch_id(property_key),
+            "action": trigger_key_action(current_value, mode),
+        },
     }
