@@ -76,7 +76,17 @@ class XHouseDeviceData:
         device-type branching: the channel count comes purely from which
         Switch_N properties the device reports.
         """
-        return self.device_type in ("WIFI_SM05_02", "WIFI_SM18_03")
+        return self.is_sm18_module or self.is_sm05_module
+
+    @property
+    def is_sm18_module(self) -> bool:
+        """True for SM18 modules, which use the richer TRIGGER_KEY payload."""
+        return self.device_type == "WIFI_SM18_03"
+
+    @property
+    def is_sm05_module(self) -> bool:
+        """True for SM05 modules, which use the bare TRIGGER_KEY payload."""
+        return self.device_type == "WIFI_SM05_02"
 
     def get_trigger_channels(self) -> list[dict]:
         """Return this module's Switch_N channel properties, in channel order."""

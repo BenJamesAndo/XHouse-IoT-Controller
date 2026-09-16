@@ -188,9 +188,9 @@ class TriggerKeyTest(unittest.TestCase):
         self.assertEqual(protocol.trigger_key_target_value("1", "0"), "0")
         self.assertEqual(protocol.trigger_key_action(None, None), 1)
 
-    def test_property_value_matches_app_payload(self) -> None:
+    def test_sm18_payload_matches_app(self) -> None:
         self.assertEqual(
-            protocol.build_trigger_key_property_value(
+            protocol.build_sm18_trigger_property_value(
                 "11770782", "Switch_3", "0", "1"
             ),
             {
@@ -198,6 +198,16 @@ class TriggerKeyTest(unittest.TestCase):
                 "type": "TRIGGER_KEY",
                 "Switch_3": "1",
                 "object": {"switchId": "03", "action": 2},
+            },
+        )
+
+    def test_sm05_payload_carries_no_state_or_opcode(self) -> None:
+        self.assertEqual(
+            protocol.build_sm05_trigger_property_value("11770782", "Switch_1"),
+            {
+                "bleCode": "11770782",
+                "type": "TRIGGER_KEY",
+                "object": {"switchId": "01"},
             },
         )
 

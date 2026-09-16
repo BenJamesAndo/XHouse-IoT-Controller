@@ -9,7 +9,8 @@ from .api import XHouseApiError
 from .const import LOGGER
 from .entity import XHouseEntity
 from .protocol import (
-    build_trigger_key_property_value,
+    build_sm05_trigger_property_value,
+    build_sm18_trigger_property_value,
     trigger_key_channel_number,
 )
 
@@ -111,17 +112,25 @@ class XHouseTriggerKeyButton(XHouseEntity, ButtonEntity):
             LOGGER.error("Cannot build trigger command for %s", self.entity_id)
             return
         api = self.coordinator.api
-        body = {
-            "deviceId": self._device_id,
-            "userId": int(api.user_id),
-            "propertyValue": build_trigger_key_property_value(
+        if data.is_sm18_module:
+            property_value = build_sm18_trigger_property_value(
                 ble_code,
                 self._property_key,
                 data.prop_values.get(self._property_key),
                 data.get_property_mode(self._property_key),
-            ),
-            # The app sends the channel number here, not the channel's label.
-            "action": self._channel,
+            )
+            # The SM18 screen sends the channel number, not the label.
+            action = self._channel
+        else:
+            property_value = build_sm05_trigger_property_value(
+                ble_code, self._property_key
+            )
+            action = self._attr_name
+        body = {
+            "deviceId": self._device_id,
+            "userId": int(api.user_id),
+            "propertyValue": property_value,
+            "action": action,
         }
         try:
             await api.send_command(body)

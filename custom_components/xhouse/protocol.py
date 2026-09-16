@@ -248,13 +248,16 @@ def trigger_key_target_value(current_value: str | None, mode: str | None) -> str
     return "1"
 
 
-def build_trigger_key_property_value(
+def build_sm18_trigger_property_value(
     ble_code: str,
     property_key: str,
     current_value: str | None,
     mode: str | None,
 ) -> dict[str, Any]:
-    """Build the ``propertyValue`` for an SM18/SM05 channel press."""
+    """Build the ``propertyValue`` an SM18 channel press sends.
+
+    From WifiRfBleControlDetailActivity (deviceType WIFI_SM18_03).
+    """
     return {
         "bleCode": ble_code,
         "type": "TRIGGER_KEY",
@@ -263,4 +266,19 @@ def build_trigger_key_property_value(
             "switchId": trigger_key_switch_id(property_key),
             "action": trigger_key_action(current_value, mode),
         },
+    }
+
+
+def build_sm05_trigger_property_value(
+    ble_code: str, property_key: str
+) -> dict[str, Any]:
+    """Build the ``propertyValue`` an SM05 channel press sends.
+
+    From WifiSM05W02DetailActivity (deviceType WIFI_SM05_02), which sends no
+    target value and no action opcode.
+    """
+    return {
+        "bleCode": ble_code,
+        "type": "TRIGGER_KEY",
+        "object": {"switchId": trigger_key_switch_id(property_key)},
     }
