@@ -9,7 +9,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import XHouseApi, XHouseApiError, XHouseAuthError
 from .const import DOMAIN, KNOWN_MODELS, LOGGER, NON_CONTROL_PROPERTIES
-from .protocol import GATE_MODE_SINGLE, parse_gate_mode
+from .protocol import GATE_MODE_SINGLE, parse_battery_reply, parse_gate_mode
 
 FAST_POLL_INTERVAL = 2.0  # seconds between refreshes during a burst
 FAST_POLL_DURATION = 30.0  # total burst length in seconds
@@ -52,6 +52,16 @@ class XHouseDeviceData:
         if self.is_egb:
             return GATE_MODE_SINGLE
         return parse_gate_mode(self.prop_values.get("menuCode"))
+
+    @property
+    def backup_battery_absent(self) -> bool:
+        """True only when the gate positively reports no backup battery.
+
+        Unreadable status (e.g. offline at startup) returns False so the
+        battery entities are still created rather than silently dropped.
+        """
+        battery = parse_battery_reply(self.prop_values.get("status"))
+        return battery is not None and not battery["battery_present"]
 
     @property
     def ble_code(self) -> str | None:

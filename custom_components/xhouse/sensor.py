@@ -31,7 +31,8 @@ async def async_setup_entry(
 
     for device_id, dev in coordinator.data.items():
         # EGA only: the battery byte offsets do not apply to EGB/PGB frames.
-        if not dev.is_ega:
+        # Gates reporting no backup battery get no battery entities at all.
+        if not dev.is_ega or dev.backup_battery_absent:
             continue
         entities.append(XHouseBatteryVoltageSensor(coordinator, device_id))
         entities.append(XHouseBatterySoCSensor(coordinator, device_id))
