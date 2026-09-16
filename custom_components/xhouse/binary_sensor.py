@@ -18,7 +18,8 @@ async def async_setup_entry(
     entities: list[BinarySensorEntity] = []
 
     for device_id, dev in coordinator.data.items():
-        if not dev.is_ble_gate or dev.ble_code is None:
+        # EGA only: the battery byte offsets do not apply to EGB/PGB frames.
+        if not dev.is_ega:
             continue
         entities.append(XHouseBatteryPresentBinarySensor(coordinator, device_id))
 
@@ -38,4 +39,4 @@ class XHouseBatteryPresentBinarySensor(XHouseEntity, BinarySensorEntity):
         if data is None or not data.online:
             return None
         battery = parse_battery_reply(data.prop_values.get("status"))
-        return battery.get("battery_present") if battery else None
+        return battery["battery_present"] if battery else None
