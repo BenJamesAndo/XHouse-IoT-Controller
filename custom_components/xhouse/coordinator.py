@@ -9,7 +9,12 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import XHouseApi, XHouseApiError, XHouseAuthError
 from .const import DOMAIN, KNOWN_MODELS, LOGGER, NON_CONTROL_PROPERTIES
-from .protocol import GATE_MODE_SINGLE, parse_battery_reply, parse_gate_mode
+from .protocol import (
+    GATE_MODE_SINGLE,
+    TRIGGER_KEY_PROPERTIES,
+    parse_battery_reply,
+    parse_gate_mode,
+)
 
 FAST_POLL_INTERVAL = 2.0  # seconds between refreshes during a burst
 FAST_POLL_DURATION = 30.0  # total burst length in seconds
@@ -62,6 +67,23 @@ class XHouseDeviceData:
         """
         battery = parse_battery_reply(self.prop_values.get("status"))
         return battery is not None and not battery["battery_present"]
+
+    @property
+    def is_trigger_module(self) -> bool:
+        """True for SM05/SM18 receiver modules (momentary trigger channels).
+
+        The app drives both families through the same screen, with no
+        device-type branching: the channel count comes purely from which
+        Switch_N properties the device reports.
+        """
+        return self.device_type in ("WIFI_SM05_02", "WIFI_SM18_03")
+
+    def get_trigger_channels(self) -> list[dict]:
+        """Return this module's Switch_N channel properties, in channel order."""
+        by_key = {p.get("key"): p for p in self.properties}
+        return [
+            by_key[key] for key in TRIGGER_KEY_PROPERTIES if key in by_key
+        ]
 
     @property
     def ble_code(self) -> str | None:

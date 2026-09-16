@@ -181,3 +181,32 @@ def is_gate_in_motion(
         else parse_ega_status(status_hex, gate_mode)
     )
     return status is not None and status["state"] in ("opening", "closing")
+
+
+# SM05/SM18 WiFi/RF receiver modules (deviceType WIFI_SM05_02, WIFI_SM18_03)
+# expose up to four momentary trigger channels as properties Switch_1..Switch_4,
+# each property's ``name`` being the user's label for that channel. Pressing one
+# sends a TRIGGER_KEY command carrying the channel's 1-based index as a
+# zero-padded string. These channels have no readable on/off state: the app only
+# ever renders their labels, so they are buttons rather than switches.
+TRIGGER_KEY_PROPERTIES = ("Switch_1", "Switch_2", "Switch_3", "Switch_4")
+
+
+def trigger_key_switch_id(property_key: str) -> str | None:
+    """Return the ``switchId`` for an SM05/SM18 channel, or None if not one."""
+    try:
+        index = TRIGGER_KEY_PROPERTIES.index(property_key)
+    except ValueError:
+        return None
+    return f"{index + 1:02d}"
+
+
+def build_trigger_key_property_value(
+    ble_code: str, switch_id: str
+) -> dict[str, Any]:
+    """Build the ``propertyValue`` for an SM05/SM18 momentary key press."""
+    return {
+        "bleCode": ble_code,
+        "type": "TRIGGER_KEY",
+        "object": {"switchId": switch_id},
+    }

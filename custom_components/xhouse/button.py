@@ -8,6 +8,7 @@ from . import XHouseConfigEntry
 from .api import XHouseApiError
 from .const import LOGGER
 from .entity import XHouseEntity
+from .protocol import build_trigger_key_property_value, trigger_key_switch_id
 
 
 async def async_setup_entry(
@@ -19,6 +20,20 @@ async def async_setup_entry(
     entities: list[ButtonEntity] = []
 
     for device_id, dev in coordinator.data.items():
+        if dev.is_trigger_module:
+            if dev.ble_code is None:
+                LOGGER.warning(
+                    "Trigger module %s missing bleCode, skipping its channels",
+                    device_id,
+                )
+                continue
+            for prop in dev.get_trigger_channels():
+                entities.append(
+                    XHouseTriggerKeyButton(
+                        coordinator, device_id, prop["key"], prop.get("name")
+                    )
+                )
+            continue
         if not dev.is_ble_gate:
             continue
         if dev.ble_code is None:
@@ -61,3 +76,44 @@ class XHousePedestrianButton(XHouseEntity, ButtonEntity):
             LOGGER.error("Failed to send pedestrian command for %s: %s", self.entity_id, err)
             return
         self.coordinator.start_fast_poll()
+
+
+class XHouseTriggerKeyButton(XHouseEntity, ButtonEntity):
+    """One momentary trigger channel on an SM05/SM18 receiver module."""
+
+    _attr_icon = "mdi:gesture-tap-button"
+
+    def __init__(
+        self,
+        coordinator,
+        device_id: int,
+        property_key: str,
+        property_name: str | None,
+    ) -> None:
+        super().__init__(coordinator, device_id, property_key.lower())
+        self._switch_id = trigger_key_switch_id(property_key)
+        self._attr_name = property_name or property_key
+
+    async def async_press(self) -> None:
+        data = self.device_data
+        if data is None:
+            return
+        ble_code = data.ble_code
+        if not ble_code or self._switch_id is None:
+            LOGGER.error("Cannot build trigger command for %s", self.entity_id)
+            return
+        api = self.coordinator.api
+        body = {
+            "deviceId": self._device_id,
+            "userId": int(api.user_id),
+            "propertyValue": build_trigger_key_property_value(
+                ble_code, self._switch_id
+            ),
+            # The app sends the channel's label here; it only feeds the
+            # activity log on the XHouse side.
+            "action": self._attr_name,
+        }
+        try:
+            await api.send_command(body)
+        except XHouseApiError as err:
+            LOGGER.error("Failed to trigger %s: %s", self.entity_id, err)

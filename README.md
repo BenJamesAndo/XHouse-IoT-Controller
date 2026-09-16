@@ -8,6 +8,7 @@ A Home Assistant custom integration for XHouse / Giigle IoT devices (gate contro
 
 - **XH-SGC01** — WiFi smart garage controller
 - **EGA18, EGA15, EGB18 & EGB1900** — Gate controllers
+- **SM18-03W & SM05-02W** — WiFi/RF receiver modules (momentary trigger channels)
 - Other WiFi switch devices discovered on the account
 
 ## Installation
@@ -46,7 +47,9 @@ After setup, click **Configure** on the integration to adjust:
 |----------|-------------|
 | `cover` | Gate/barrier controllers (open, close, stop) |
 | `switch` | On/off switch devices |
-| `button` | Momentary action buttons |
+| `button` | Momentary action buttons, and SM18/SM05 trigger channels |
+| `sensor` | Backup battery voltage and charge level |
+| `binary_sensor` | Backup battery presence |
 
 ## Links
 

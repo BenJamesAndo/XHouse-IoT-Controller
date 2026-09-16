@@ -23,6 +23,10 @@ async def async_setup_entry(
     for device_id, dev in coordinator.data.items():
         if dev.is_known_model:
             continue
+        # SM05/SM18 channels look like Switch_N but are momentary triggers with
+        # no readable state; the button platform handles them.
+        if dev.is_trigger_module:
+            continue
         props = dev.get_controllable_properties()
         if not props:
             LOGGER.warning(
