@@ -108,11 +108,13 @@ class XHouseApi:
             raise XHouseApiError(f"Failed to get devices: {data.get('msg')}")
         return (data.get("result") or {}).get("deviceInfos") or []
 
-    async def get_device_properties(self, device_id: int) -> dict[str, str]:
-        """Return device properties, including the live gate status frame.
+    async def get_device_properties(self, device_id: int) -> list[dict[str, Any]]:
+        """Return the live property objects, including the gate status frame.
 
         The APK calls its polling helper ``getWifiDeviceKeysStatus``, but that
-        helper resolves to this ``wifi/getWifiProperties`` HTTP route.
+        helper resolves to this ``wifi/getWifiProperties`` HTTP route. The full
+        objects are returned because SM18 modules carry per-channel ``mode``
+        here, and the app reads it from this poll rather than the device list.
         """
         data = await self._api_post(
             "wifi/getWifiProperties",
@@ -120,10 +122,7 @@ class XHouseApi:
         )
         self._check_token_error(data)
         if data.get("code") == "0":
-            return {
-                p["key"]: p.get("value")
-                for p in (data.get("result") or {}).get("properties") or []
-            }
+            return (data.get("result") or {}).get("properties") or []
         msg = (data.get("msg") or "").lower()
         if "device offline" in msg:
             raise XHouseApiError("device offline")

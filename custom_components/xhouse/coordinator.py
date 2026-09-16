@@ -30,6 +30,7 @@ class XHouseDeviceData:
         self.online: bool = raw.get("status", 0) == 1
         self.properties: list[dict] = raw.get("properties", [])
         self.prop_values: dict[str, str] = {}
+        self.live_properties: list[dict] = []
 
     @property
     def is_known_model(self) -> bool:
@@ -96,10 +97,15 @@ class XHouseDeviceData:
         ]
 
     def get_property_mode(self, property_key: str) -> str | None:
-        """Return a property's ``mode``, which distinguishes channel types."""
-        for p in self.properties:
-            if p.get("key") == property_key:
-                return p.get("mode")
+        """Return a property's ``mode``, which distinguishes channel types.
+
+        The app reads this from the ``getWifiProperties`` poll, so prefer the
+        live objects and only fall back to the device-list copy.
+        """
+        for source in (self.live_properties, self.properties):
+            for p in source:
+                if p.get("key") == property_key and p.get("mode") is not None:
+                    return p.get("mode")
         return None
 
     @property
@@ -194,7 +200,14 @@ class XHouseCoordinator(DataUpdateCoordinator[dict[int, XHouseDeviceData]]):
 
             if dev.online:
                 try:
-                    dev.prop_values = await self.api.get_device_properties(dev.device_id)
+                    dev.live_properties = await self.api.get_device_properties(
+                        dev.device_id
+                    )
+                    dev.prop_values = {
+                        p["key"]: p.get("value")
+                        for p in dev.live_properties
+                        if "key" in p
+                    }
                     LOGGER.debug(
                         "Properties for device %s (model=%s): %s",
                         dev.device_id, dev.model, dev.prop_values,
