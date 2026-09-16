@@ -106,9 +106,16 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(protocol.estimate_battery_soc(24.87, True), 82)
         self.assertEqual(protocol.estimate_battery_soc(24.787, True), 77)
 
-    def test_estimate_battery_soc_clamps_out_of_range_voltages(self) -> None:
-        self.assertEqual(protocol.estimate_battery_soc(5.0, True), 0)
+    def test_estimate_battery_soc_clamps_high_voltage(self) -> None:
         self.assertEqual(protocol.estimate_battery_soc(30.0, True), 100)
+        self.assertEqual(protocol.estimate_battery_soc(21.0, True), 0)
+
+    def test_estimate_battery_soc_below_curve_is_unknown(self) -> None:
+        # Below the 24V curve floor we cannot interpret the pack (e.g. a
+        # single 12V battery), so report unknown rather than a flat 0%.
+        for voltage in (5.0, 12.0, 12.6, 20.9):
+            with self.subTest(voltage=voltage):
+                self.assertIsNone(protocol.estimate_battery_soc(voltage, True))
 
     def test_is_gate_in_motion_ega(self) -> None:
         idle_closed = "325279331900030300006126000000010100000B0D"
