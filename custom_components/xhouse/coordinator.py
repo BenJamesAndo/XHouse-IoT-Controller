@@ -208,10 +208,22 @@ class XHouseCoordinator(DataUpdateCoordinator[dict[int, XHouseDeviceData]]):
                         for p in dev.live_properties
                         if "key" in p
                     }
-                    LOGGER.debug(
-                        "Properties for device %s (model=%s): %s",
-                        dev.device_id, dev.model, dev.prop_values,
-                    )
+                    if dev.is_trigger_module:
+                        # mode/relayTime decide the opcode a press sends, so
+                        # log the channels in full rather than just values.
+                        LOGGER.debug(
+                            "Channels for device %s (%s): %s",
+                            dev.device_id, dev.device_type,
+                            [
+                                {k: p.get(k) for k in ("key", "name", "value", "mode", "relayTime")}
+                                for p in dev.get_trigger_channels()
+                            ],
+                        )
+                    else:
+                        LOGGER.debug(
+                            "Properties for device %s (model=%s): %s",
+                            dev.device_id, dev.model, dev.prop_values,
+                        )
                 except XHouseApiError as err:
                     if "device offline" in str(err).lower():
                         dev.online = False

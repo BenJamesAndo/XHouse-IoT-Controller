@@ -112,12 +112,11 @@ class XHouseTriggerKeyButton(XHouseEntity, ButtonEntity):
             LOGGER.error("Cannot build trigger command for %s", self.entity_id)
             return
         api = self.coordinator.api
+        current = data.prop_values.get(self._property_key)
+        mode = data.get_property_mode(self._property_key)
         if data.is_sm18_module:
             property_value = build_sm18_trigger_property_value(
-                ble_code,
-                self._property_key,
-                data.prop_values.get(self._property_key),
-                data.get_property_mode(self._property_key),
+                ble_code, self._property_key, current, mode
             )
             # The SM18 screen sends the channel number, not the label.
             action = self._channel
@@ -132,9 +131,16 @@ class XHouseTriggerKeyButton(XHouseEntity, ButtonEntity):
             "propertyValue": property_value,
             "action": action,
         }
+        # A press the server accepts but the device ignores is otherwise
+        # invisible, so record exactly what was sent and from what state.
+        LOGGER.debug(
+            "Trigger %s: value=%r mode=%r sending %s",
+            self.entity_id, current, mode, body,
+        )
         try:
             await api.send_command(body)
         except XHouseApiError as err:
             LOGGER.error("Failed to trigger %s: %s", self.entity_id, err)
             return
+        LOGGER.debug("Trigger %s: server accepted", self.entity_id)
         await self.coordinator.async_request_refresh()
