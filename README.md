@@ -30,9 +30,13 @@ A Home Assistant custom integration for XHouse / Giigle IoT devices (gate contro
 
 ## Setup
 
+XHouse only allows one login at a time, so if the app and Home Assistant share
+an account they will keep signing each other out. Create a separate XHouse
+account for Home Assistant first and share your devices to it from the app.
+
 1. Go to **Settings → Devices & Services → Add Integration**
 2. Search for **XHouse IoT Controller**
-3. Enter your XHouse account email and password. Use a second account linked to your device to prevent log outs on your app when using Home Assistant.
+3. Enter the email and password of the account you created for Home Assistant
 
 ## Configuration
 
@@ -50,13 +54,6 @@ After setup, click **Configure** on the integration to adjust:
 | `button` | Momentary action buttons, and SM18/SM05 trigger channels |
 | `sensor` | Backup battery voltage and charge level |
 | `binary_sensor` | Backup battery presence |
-
-## Use a second account
-
-XHouse only allows one login at a time, so the app and Home Assistant will
-keep signing each other out if they share an account. Create a separate
-XHouse account for Home Assistant and share your devices to it from the app.
-More on this in the [community thread](https://community.home-assistant.io/t/sgc01-smart-wifi-garage-opener/457208).
 
 ## Links
 
