@@ -19,6 +19,11 @@ from .const import (
 )
 
 
+SESSION_INVALID_CODES = frozenset(
+    {"000000000011", "000000000008", "100009", "000000000010", "100012"}
+)
+
+
 class XHouseApiError(Exception):
     pass
 
@@ -32,6 +37,7 @@ class XHouseApi:
         self._session = session
         self.user_id: str | None = None
         self.token: str | None = None
+        self._credentials: tuple[str, str] | None = None
 
     def _generate_signature(self) -> tuple[str, str]:
         timestamp = str(int(time.time()))
@@ -75,7 +81,10 @@ class XHouseApi:
                 url, headers=headers, data=body_string, timeout=aiohttp.ClientTimeout(total=10)
             ) as resp:
                 resp.raise_for_status()
-                return await resp.json()
+                # A displaced session is answered with HTTP 200 but
+                # content-type text/json, which aiohttp's strict decoder
+                # rejects. Parse regardless so the code/msg can be seen.
+                return await resp.json(content_type=None)
         except aiohttp.ClientError as err:
             raise XHouseApiError(f"API request to {endpoint} failed: {err}") from err
 
@@ -92,18 +101,39 @@ class XHouseApi:
         if data.get("code") == "0":
             self.user_id = data["result"]["userId"]
             self.token = data["result"]["token"]
+            self._credentials = (email, password)
             LOGGER.debug("Login successful, user_id=%s", self.user_id)
             return True
 
         msg = data.get("msg", "Unknown error")
         raise XHouseAuthError(f"Login failed: {msg}")
 
+    async def _post_authed(self, endpoint: str, body: dict) -> dict[str, Any]:
+        """POST as the logged-in user, re-authenticating once if displaced.
+
+        The account allows a single session: any other login (the phone app,
+        another HA instance) invalidates this token. Recover transparently so
+        a poll or command issued after that still succeeds.
+        """
+        data = await self._api_post(endpoint, body)
+        try:
+            self._check_token_error(data)
+        except XHouseAuthError:
+            if not self._credentials:
+                raise
+            LOGGER.warning(
+                "XHouse session was displaced by another login; re-authenticating"
+            )
+            await self.login(*self._credentials)
+            data = await self._api_post(endpoint, body)
+            self._check_token_error(data)
+        return data
+
     async def get_devices(self) -> list[dict[str, Any]]:
-        data = await self._api_post(
+        data = await self._post_authed(
             "group/queryGroupDevices",
             {"userId": int(self.user_id), "groupId": 0},
         )
-        self._check_token_error(data)
         if data.get("code") != "0":
             raise XHouseApiError(f"Failed to get devices: {data.get('msg')}")
         return (data.get("result") or {}).get("deviceInfos") or []
@@ -116,11 +146,10 @@ class XHouseApi:
         objects are returned because SM18 modules carry per-channel ``mode``
         here, and the app reads it from this poll rather than the device list.
         """
-        data = await self._api_post(
+        data = await self._post_authed(
             "wifi/getWifiProperties",
             {"userId": int(self.user_id), "deviceId": device_id},
         )
-        self._check_token_error(data)
         if data.get("code") == "0":
             return (data.get("result") or {}).get("properties") or []
         msg = (data.get("msg") or "").lower()
@@ -129,8 +158,7 @@ class XHouseApi:
         raise XHouseApiError(f"Failed to get device state: {data.get('msg')}")
 
     async def send_command(self, body: dict[str, Any]) -> bool:
-        data = await self._api_post("wifi/sendWifiCode", body)
-        self._check_token_error(data)
+        data = await self._post_authed("wifi/sendWifiCode", body)
         if data.get("code") == "0":
             return True
         msg = (data.get("msg") or "").lower()
@@ -139,8 +167,11 @@ class XHouseApi:
         raise XHouseApiError(f"Failed to control device: {data.get('msg')}")
 
     def _check_token_error(self, data: dict) -> None:
-        msg = (data or {}).get("msg", "").lower()
-        if "token invalid" in msg:
+        data = data or {}
+        msg = (data.get("msg") or "").lower()
+        # 000000000011 is what a displaced token gets ("token invalid!"); the
+        # other four are the codes the app maps to its logged-out screen.
+        if str(data.get("code")) in SESSION_INVALID_CODES or "token invalid" in msg:
             self.token = None
             self.user_id = None
             raise XHouseAuthError("Token invalid")

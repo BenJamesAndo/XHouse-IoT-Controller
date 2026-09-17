@@ -51,6 +51,13 @@ After setup, click **Configure** on the integration to adjust:
 | `sensor` | Backup battery voltage and charge level |
 | `binary_sensor` | Backup battery presence |
 
+## Use a second account
+
+XHouse only allows one login at a time, so the app and Home Assistant will
+keep signing each other out if they share an account. Create a separate
+XHouse account for Home Assistant and share your devices to it from the app.
+More on this in the [community thread](https://community.home-assistant.io/t/sgc01-smart-wifi-garage-opener/457208).
+
 ## Links
 
 - [Community thread](https://community.home-assistant.io/t/sgc01-smart-wifi-garage-opener/457208)
