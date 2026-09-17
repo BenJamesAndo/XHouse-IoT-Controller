@@ -74,11 +74,13 @@ class XHousePedestrianButton(XHouseEntity, ButtonEntity):
             "propertyValue": {"type": "SET_MENU", "object": {"value": hex_value}},
             "action": "",
         }
+        LOGGER.debug("Sending command for %s: %s", self.entity_id, body)
         try:
             await api.send_command(body)
         except XHouseApiError as err:
             LOGGER.error("Failed to send pedestrian command for %s: %s", self.entity_id, err)
             return
+        LOGGER.debug("Command for %s accepted", self.entity_id)
         self.coordinator.start_fast_poll()
 
 

@@ -88,11 +88,13 @@ class XHouseKnownCover(XHouseEntity, CoverEntity):
             "propertyValue": {"Switch_1": value},
             "action": "On" if value else "Off",
         }
+        LOGGER.debug("Sending command for %s: %s", self.entity_id, body)
         try:
             await api.send_command(body)
         except XHouseApiError as err:
             LOGGER.error("Failed to control cover %s: %s", self.entity_id, err)
             return
+        LOGGER.debug("Command for %s accepted", self.entity_id)
         await self.coordinator.async_request_refresh()
 
 
@@ -194,9 +196,11 @@ class XHouseGateCover(XHouseEntity, CoverEntity):
             "propertyValue": {"type": "SET_MENU", "object": {"value": hex_value}},
             "action": "",
         }
+        LOGGER.debug("Sending command for %s: %s", self.entity_id, body)
         try:
             await api.send_command(body)
         except XHouseApiError as err:
             LOGGER.error("Failed to control gate cover %s: %s", self.entity_id, err)
             return
+        LOGGER.debug("Command for %s accepted", self.entity_id)
         self.coordinator.start_fast_poll()
