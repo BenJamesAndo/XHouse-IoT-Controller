@@ -85,7 +85,7 @@ class XHouseApi:
                 # content-type text/json, which aiohttp's strict decoder
                 # rejects. Parse regardless so the code/msg can be seen.
                 return await resp.json(content_type=None)
-        except aiohttp.ClientError as err:
+        except (aiohttp.ClientError, TimeoutError) as err:
             raise XHouseApiError(f"API request to {endpoint} failed: {err}") from err
 
     async def login(self, email: str, password: str) -> bool:
