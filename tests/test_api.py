@@ -47,6 +47,36 @@ class _TimeoutSession:
         return _TimeoutRequest()
 
 
+class _JsonResponse:
+    def __init__(self, data):
+        self._data = data
+
+    def raise_for_status(self):
+        pass
+
+    async def json(self, content_type=None):
+        return self._data
+
+
+class _JsonRequest:
+    def __init__(self, data):
+        self._data = data
+
+    async def __aenter__(self):
+        return _JsonResponse(self._data)
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _JsonSession:
+    def __init__(self, data):
+        self._data = data
+
+    def post(self, *args, **kwargs):
+        return _JsonRequest(self._data)
+
+
 class ApiTest(unittest.TestCase):
     def test_api_post_wraps_timeout(self) -> None:
         # aiohttp's total deadline raises a bare TimeoutError, which is not a
@@ -57,6 +87,14 @@ class ApiTest(unittest.TestCase):
             asyncio.run(client._api_post("clientUser/login", {}, authenticated=False))
         # A bare TimeoutError has an empty str(); the message must still say what failed.
         self.assertIn("TimeoutError", str(ctx.exception))
+
+
+    def test_login_rejection_is_distinct_and_names_the_code(self) -> None:
+        client = api.XHouseApi(_JsonSession({"code": "1", "msg": "password error"}))
+        with self.assertRaises(api.XHouseLoginRejected) as ctx:
+            asyncio.run(client.login("a@b.c", "wrong"))
+        self.assertIsInstance(ctx.exception, api.XHouseAuthError)
+        self.assertIn("code 1", str(ctx.exception))
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import XHouseApi, XHouseApiError, XHouseAuthError
+from .api import XHouseApi, XHouseApiError, XHouseAuthError, XHouseLoginRejected
 from .const import DOMAIN, KNOWN_MODELS, LOGGER, NON_CONTROL_PROPERTIES
 from .protocol import (
     GATE_MODE_SINGLE,
@@ -19,6 +19,7 @@ from .protocol import (
 
 FAST_POLL_INTERVAL = 2.0  # seconds between refreshes during a burst
 FAST_POLL_DURATION = 30.0  # total burst length in seconds
+LOGIN_REJECTIONS_BEFORE_REAUTH = 3
 
 
 class XHouseDeviceData:
@@ -144,6 +145,7 @@ class XHouseCoordinator(DataUpdateCoordinator[dict[int, XHouseDeviceData]]):
         self._password = password
         self._fast_poll_task: asyncio.Task | None = None
         self._fast_poll_deadline: float = 0.0
+        self._login_rejections = 0
 
     def start_fast_poll(
         self,
@@ -179,23 +181,23 @@ class XHouseCoordinator(DataUpdateCoordinator[dict[int, XHouseDeviceData]]):
 
     async def _async_update_data(self) -> dict[int, XHouseDeviceData]:
         try:
-            return await self._fetch_all()
-        except XHouseAuthError:
-            LOGGER.warning("Token expired, re-authenticating")
-            try:
+            if self.api.token is None:
+                # A rejected re-login leaves the client logged out.
                 await self.api.login(self._email, self._password)
-            except XHouseAuthError as err:
-                # The cloud rejected the stored password. Ask for a new one
-                # instead of failing every refresh from here on.
+            data = await self._fetch_all()
+        except XHouseLoginRejected as err:
+            # Login failures aren't classified yet, so only ask for a new
+            # password once they keep happening.
+            self._login_rejections += 1
+            if self._login_rejections >= LOGIN_REJECTIONS_BEFORE_REAUTH:
                 raise ConfigEntryAuthFailed(str(err)) from err
-            except XHouseApiError as err:
-                raise UpdateFailed(f"Auth retry failed: {err}") from err
-            try:
-                return await self._fetch_all()
-            except XHouseApiError as err:
-                raise UpdateFailed(str(err)) from err
+            raise UpdateFailed(
+                f"{err} ({self._login_rejections}/{LOGIN_REJECTIONS_BEFORE_REAUTH})"
+            ) from err
         except XHouseApiError as err:
             raise UpdateFailed(str(err)) from err
+        self._login_rejections = 0
+        return data
 
     async def _fetch_all(self) -> dict[int, XHouseDeviceData]:
         raw_devices = await self.api.get_devices()
@@ -232,6 +234,8 @@ class XHouseCoordinator(DataUpdateCoordinator[dict[int, XHouseDeviceData]]):
                             "Properties for device %s (model=%s): %s",
                             dev.device_id, dev.model, dev.prop_values,
                         )
+                except XHouseAuthError:
+                    raise
                 except XHouseApiError as err:
                     if "device offline" in str(err).lower():
                         dev.online = False

@@ -32,6 +32,10 @@ class XHouseAuthError(XHouseApiError):
     pass
 
 
+class XHouseLoginRejected(XHouseAuthError):
+    """The cloud refused the login request."""
+
+
 class XHouseApi:
     def __init__(self, session: aiohttp.ClientSession) -> None:
         self._session = session
@@ -108,7 +112,7 @@ class XHouseApi:
             return True
 
         msg = data.get("msg", "Unknown error")
-        raise XHouseAuthError(f"Login failed: {msg}")
+        raise XHouseLoginRejected(f"Login failed: {msg} (code {data.get('code')})")
 
     async def _post_authed(self, endpoint: str, body: dict) -> dict[str, Any]:
         """POST as the logged-in user, re-authenticating once if displaced.
