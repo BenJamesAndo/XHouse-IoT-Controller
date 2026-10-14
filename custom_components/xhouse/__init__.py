@@ -4,7 +4,7 @@ from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import XHouseApi, XHouseApiError, XHouseAuthError
@@ -37,7 +37,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: XHouseConfigEntry) -> bo
     try:
         await api.login(email, password)
     except XHouseAuthError as err:
-        raise ConfigEntryError(str(err)) from err
+        raise ConfigEntryAuthFailed(str(err)) from err
     except XHouseApiError as err:
         # Typically the network or cloud isn't reachable yet right after an
         # HA restart; ConfigEntryNotReady makes HA retry with backoff.

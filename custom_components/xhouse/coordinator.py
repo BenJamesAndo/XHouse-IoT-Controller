@@ -5,6 +5,7 @@ from datetime import timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import XHouseApi, XHouseApiError, XHouseAuthError
@@ -183,9 +184,16 @@ class XHouseCoordinator(DataUpdateCoordinator[dict[int, XHouseDeviceData]]):
             LOGGER.warning("Token expired, re-authenticating")
             try:
                 await self.api.login(self._email, self._password)
-                return await self._fetch_all()
+            except XHouseAuthError as err:
+                # The cloud rejected the stored password. Ask for a new one
+                # instead of failing every refresh from here on.
+                raise ConfigEntryAuthFailed(str(err)) from err
             except XHouseApiError as err:
                 raise UpdateFailed(f"Auth retry failed: {err}") from err
+            try:
+                return await self._fetch_all()
+            except XHouseApiError as err:
+                raise UpdateFailed(str(err)) from err
         except XHouseApiError as err:
             raise UpdateFailed(str(err)) from err
 
