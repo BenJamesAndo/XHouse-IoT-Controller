@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 import aiohttp
@@ -25,6 +26,8 @@ USER_SCHEMA = vol.Schema(
     }
 )
 
+REAUTH_SCHEMA = vol.Schema({vol.Required(CONF_PASSWORD): str})
+
 OPTIONS_SCHEMA = vol.Schema(
     {
         vol.Optional(CONF_REFRESH_INTERVAL, default=DEFAULT_REFRESH_INTERVAL): vol.All(
@@ -33,6 +36,21 @@ OPTIONS_SCHEMA = vol.Schema(
         vol.Optional(CONF_DEBUG_MODE, default=False): bool,
     }
 )
+
+
+async def _validate_login(email: str, password: str) -> dict[str, str]:
+    """Try the credentials and return form errors (empty on success)."""
+    session = aiohttp.ClientSession()
+    api = XHouseApi(session)
+    try:
+        await api.login(email, password)
+    except XHouseAuthError:
+        return {"base": "invalid_auth"}
+    except Exception:
+        return {"base": "cannot_connect"}
+    finally:
+        await session.close()
+    return {}
 
 
 class XHouseConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -44,17 +62,9 @@ class XHouseConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            session = aiohttp.ClientSession()
-            api = XHouseApi(session)
-            try:
-                await api.login(user_input[CONF_EMAIL], user_input[CONF_PASSWORD])
-            except XHouseAuthError:
-                errors["base"] = "invalid_auth"
-            except Exception:
-                errors["base"] = "cannot_connect"
-            finally:
-                await session.close()
-
+            errors = await _validate_login(
+                user_input[CONF_EMAIL], user_input[CONF_PASSWORD]
+            )
             if not errors:
                 await self.async_set_unique_id(user_input[CONF_EMAIL])
                 self._abort_if_unique_id_configured()
@@ -69,6 +79,33 @@ class XHouseConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="user", data_schema=USER_SCHEMA, errors=errors
+        )
+
+    async def async_step_reauth(
+        self, entry_data: Mapping[str, Any]
+    ) -> ConfigFlowResult:
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
+        entry = self._get_reauth_entry()
+
+        if user_input is not None:
+            errors = await _validate_login(
+                entry.data[CONF_EMAIL], user_input[CONF_PASSWORD]
+            )
+            if not errors:
+                return self.async_update_reload_and_abort(
+                    entry, data_updates={CONF_PASSWORD: user_input[CONF_PASSWORD]}
+                )
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=REAUTH_SCHEMA,
+            description_placeholders={"email": entry.data[CONF_EMAIL]},
+            errors=errors,
         )
 
     @staticmethod
