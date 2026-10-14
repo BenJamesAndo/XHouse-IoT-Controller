@@ -186,10 +186,13 @@ class XHouseCoordinator(DataUpdateCoordinator[dict[int, XHouseDeviceData]]):
                 await self.api.login(self._email, self._password)
             data = await self._fetch_all()
         except XHouseLoginRejected as err:
-            # Login failures aren't classified yet, so only ask for a new
-            # password once they keep happening.
+            # Only the known wrong-password code prompts straight away.
+            # Other rejections count, so a one-off cloud error doesn't.
             self._login_rejections += 1
-            if self._login_rejections >= LOGIN_REJECTIONS_BEFORE_REAUTH:
+            if (
+                err.wrong_credentials
+                or self._login_rejections >= LOGIN_REJECTIONS_BEFORE_REAUTH
+            ):
                 raise ConfigEntryAuthFailed(str(err)) from err
             raise UpdateFailed(
                 f"{err} ({self._login_rejections}/{LOGIN_REJECTIONS_BEFORE_REAUTH})"

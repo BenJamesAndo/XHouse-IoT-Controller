@@ -95,6 +95,18 @@ class ApiTest(unittest.TestCase):
             asyncio.run(client.login("a@b.c", "wrong"))
         self.assertIsInstance(ctx.exception, api.XHouseAuthError)
         self.assertIn("code 1", str(ctx.exception))
+        self.assertFalse(ctx.exception.wrong_credentials)
+
+    def test_login_rejection_recognises_wrong_credentials(self) -> None:
+        # Captured when the account password had been changed in the app.
+        for code in ("806020030002", 806020030002):
+            with self.subTest(code=code):
+                client = api.XHouseApi(
+                    _JsonSession({"code": code, "msg": "账户或者密码错误"})
+                )
+                with self.assertRaises(api.XHouseLoginRejected) as ctx:
+                    asyncio.run(client.login("a@b.c", "old"))
+                self.assertTrue(ctx.exception.wrong_credentials)
 
 
 if __name__ == "__main__":
