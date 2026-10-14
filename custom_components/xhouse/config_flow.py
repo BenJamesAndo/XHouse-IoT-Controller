@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-import aiohttp
 import voluptuous as vol
 
 from homeassistant.config_entries import (
@@ -11,7 +10,8 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     OptionsFlowWithReload,
 )
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import XHouseApi, XHouseAuthError
 from .const import (
@@ -42,18 +42,17 @@ OPTIONS_SCHEMA = vol.Schema(
 )
 
 
-async def _validate_login(email: str, password: str) -> dict[str, str]:
+async def _validate_login(
+    hass: HomeAssistant, email: str, password: str
+) -> dict[str, str]:
     """Try the credentials and return form errors (empty on success)."""
-    session = aiohttp.ClientSession()
-    api = XHouseApi(session)
+    api = XHouseApi(async_get_clientsession(hass))
     try:
         await api.login(email, password)
     except XHouseAuthError:
         return {"base": "invalid_auth"}
     except Exception:
         return {"base": "cannot_connect"}
-    finally:
-        await session.close()
     return {}
 
 
@@ -67,7 +66,7 @@ class XHouseConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             errors = await _validate_login(
-                user_input[CONF_EMAIL], user_input[CONF_PASSWORD]
+                self.hass, user_input[CONF_EMAIL], user_input[CONF_PASSWORD]
             )
             if not errors:
                 await self.async_set_unique_id(user_input[CONF_EMAIL])
@@ -98,7 +97,7 @@ class XHouseConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             errors = await _validate_login(
-                entry.data[CONF_EMAIL], user_input[CONF_PASSWORD]
+                self.hass, entry.data[CONF_EMAIL], user_input[CONF_PASSWORD]
             )
             if not errors:
                 return self.async_update_reload_and_abort(
@@ -115,13 +114,10 @@ class XHouseConfigFlow(ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(config_entry):
-        return XHouseOptionsFlow(config_entry)
+        return XHouseOptionsFlow()
 
 
 class XHouseOptionsFlow(OptionsFlowWithReload):
-    def __init__(self, config_entry) -> None:
-        self._config_entry = config_entry
-
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -134,13 +130,13 @@ class XHouseOptionsFlow(OptionsFlowWithReload):
                 {
                     vol.Optional(
                         CONF_REFRESH_INTERVAL,
-                        default=self._config_entry.options.get(
+                        default=self.config_entry.options.get(
                             CONF_REFRESH_INTERVAL, DEFAULT_REFRESH_INTERVAL
                         ),
                     ): vol.All(int, vol.Range(min=5)),
                     vol.Optional(
                         CONF_DEBUG_MODE,
-                        default=self._config_entry.options.get(CONF_DEBUG_MODE, False),
+                        default=self.config_entry.options.get(CONF_DEBUG_MODE, False),
                     ): bool,
                 }
             ),
