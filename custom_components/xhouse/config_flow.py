@@ -6,7 +6,11 @@ from typing import Any
 import aiohttp
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, OptionsFlow
+from homeassistant.config_entries import (
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlowWithReload,
+)
 from homeassistant.core import callback
 
 from .api import XHouseApi, XHouseAuthError
@@ -114,7 +118,7 @@ class XHouseConfigFlow(ConfigFlow, domain=DOMAIN):
         return XHouseOptionsFlow(config_entry)
 
 
-class XHouseOptionsFlow(OptionsFlow):
+class XHouseOptionsFlow(OptionsFlowWithReload):
     def __init__(self, config_entry) -> None:
         self._config_entry = config_entry
 

@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from datetime import timedelta
-
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import XHouseApi, XHouseApiError, XHouseAuthError
+from .api import XHouseApi, XHouseApiError, XHouseLoginRejected
 from .const import (
     CONF_DEBUG_MODE,
     CONF_EMAIL,
@@ -27,17 +25,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: XHouseConfigEntry) -> bo
     email = entry.data[CONF_EMAIL]
     password = entry.data[CONF_PASSWORD]
     refresh_interval = entry.options.get(CONF_REFRESH_INTERVAL, DEFAULT_REFRESH_INTERVAL)
-    debug_mode = entry.options.get(CONF_DEBUG_MODE, False)
 
-    if debug_mode:
+    if entry.options.get(CONF_DEBUG_MODE, False):
         LOGGER.setLevel("DEBUG")
+        # Undo it on unload so turning the option off takes effect.
+        entry.async_on_unload(lambda: LOGGER.setLevel("NOTSET"))
 
     session = async_get_clientsession(hass)
     api = XHouseApi(session)
     try:
         await api.login(email, password)
-    except XHouseAuthError as err:
-        raise ConfigEntryAuthFailed(str(err)) from err
+    except XHouseLoginRejected as err:
+        if err.wrong_credentials:
+            raise ConfigEntryAuthFailed(str(err)) from err
+        raise ConfigEntryNotReady(str(err)) from err
     except XHouseApiError as err:
         # Typically the network or cloud isn't reachable yet right after an
         # HA restart; ConfigEntryNotReady makes HA retry with backoff.
@@ -48,19 +49,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: XHouseConfigEntry) -> bo
 
     entry.runtime_data = coordinator
 
-    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
-
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
-
-
-async def _async_update_listener(hass: HomeAssistant, entry: XHouseConfigEntry) -> None:
-    coordinator: XHouseCoordinator = entry.runtime_data
-    new_interval = entry.options.get(CONF_REFRESH_INTERVAL, DEFAULT_REFRESH_INTERVAL)
-    coordinator.update_interval = timedelta(seconds=new_interval)
-    # Apply debug_mode immediately; "NOTSET" reverts to inheriting HA's level.
-    LOGGER.setLevel("DEBUG" if entry.options.get(CONF_DEBUG_MODE, False) else "NOTSET")
-    await coordinator.async_request_refresh()
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: XHouseConfigEntry) -> bool:

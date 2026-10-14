@@ -23,6 +23,9 @@ SESSION_INVALID_CODES = frozenset(
     {"000000000011", "000000000008", "100009", "000000000010", "100012"}
 )
 
+# Code the cloud returns for a wrong email or password.
+WRONG_CREDENTIALS_CODE = "806020030002"
+
 
 class XHouseApiError(Exception):
     pass
@@ -34,6 +37,14 @@ class XHouseAuthError(XHouseApiError):
 
 class XHouseLoginRejected(XHouseAuthError):
     """The cloud refused the login request."""
+
+    def __init__(self, message: str, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+
+    @property
+    def wrong_credentials(self) -> bool:
+        return self.code == WRONG_CREDENTIALS_CODE
 
 
 class XHouseApi:
@@ -111,8 +122,9 @@ class XHouseApi:
             LOGGER.debug("Login successful, user_id=%s", self.user_id)
             return True
 
+        code = str(data.get("code"))
         msg = data.get("msg", "Unknown error")
-        raise XHouseLoginRejected(f"Login failed: {msg} (code {data.get('code')})")
+        raise XHouseLoginRejected(f"Login failed: {msg} (code {code})", code)
 
     async def _post_authed(self, endpoint: str, body: dict) -> dict[str, Any]:
         """POST as the logged-in user, re-authenticating once if displaced.
